@@ -522,6 +522,10 @@ if(brpc_FOUND)
         -ldl
         -lz
     )
+    find_library(URING_LIBRARY uring)
+    if(URING_LIBRARY)
+        target_link_libraries(brpc_with_headers INTERFACE ${URING_LIBRARY})
+    endif()
 else()
     message(WARNING "brpc not available, brpc_client will not be built")
 endif()
