@@ -250,7 +250,7 @@ function(_brpc_add_ready_target target_name)
 endfunction()
 
 function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_dir)
-    set(options)
+    set(options FORWARD_CPP_FLAGS)
     set(one_value_args SOURCE_SUBDIR LIBDIR)
     set(multi_value_args CMAKE_ARGS DEPENDS BYPRODUCTS POST_INSTALL_COMMANDS)
     cmake_parse_arguments(arg "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
@@ -265,6 +265,22 @@ function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_
         set(_install_libdir "${arg_LIBDIR}")
     endif()
 
+    set(_brpc_forwarded_cpp_flags "")
+    if(arg_FORWARD_CPP_FLAGS)
+        # brpc rewrites CMAKE_C_FLAGS/CMAKE_CXX_FLAGS from this nonstandard variable.
+        if(NOT "${CMAKE_CPP_FLAGS}" STREQUAL "")
+            set(_brpc_forwarded_cpp_flags "${CMAKE_CPP_FLAGS}")
+        else()
+            set(_brpc_forwarded_cpp_flags "${CMAKE_C_FLAGS}")
+        endif()
+    endif()
+
+    set(_brpc_forwarded_cpp_flag_arg "")
+    if(NOT "${_brpc_forwarded_cpp_flags}" STREQUAL "")
+        list(APPEND _brpc_forwarded_cpp_flag_arg
+            "-DCMAKE_CPP_FLAGS=${_brpc_forwarded_cpp_flags}")
+    endif()
+
     add_custom_command(
         OUTPUT ${arg_BYPRODUCTS}
         COMMAND ${CMAKE_COMMAND} -E make_directory "${binary_dir}"
@@ -275,6 +291,11 @@ function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_
             -DCMAKE_BUILD_TYPE=RelWithDebInfo
             -DCMAKE_INSTALL_PREFIX=${install_dir}
             -DCMAKE_INSTALL_LIBDIR=${_install_libdir}
+            -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+            -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+            "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}"
+            "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
+            ${_brpc_forwarded_cpp_flag_arg}
             -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON
             -DCMAKE_EXPORT_PACKAGE_REGISTRY=OFF
             -DCMAKE_POLICY_DEFAULT_CMP0090=NEW
@@ -457,6 +478,7 @@ if(NOT brpc_FOUND)
         "${brpc_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/_deps/brpc-subbuild"
         "${BRPC_INSTALL_DIR}"
+        FORWARD_CPP_FLAGS
         LIBDIR lib64
         CMAKE_ARGS
             -DBUILD_SHARED_LIBS=OFF
