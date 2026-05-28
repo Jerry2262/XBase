@@ -1,0 +1,270 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: CI
+
+on: [push, pull_request]
+
+# Concurrency strategy:
+#   github.workflow: distinguish this workflow from others
+#   github.event_name: distinguish `push` event from `pull_request` event
+#   github.event.number: set to the number of the pull request if `pull_request` event
+#   github.run_id: otherwise, it's a `push` event, only cancel if we rerun the workflow
+#
+# Reference:
+#   https://docs.github.com/en/actions/using-jobs/using-concurrency
+#   https://docs.github.com/en/actions/learn-github-actions/contexts#github-context
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  check-and-lint:
+    name: Lint and check code
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v3
+        with:
+          go-version-file: 'tests/gocase/go.mod'
+      - name: Prepare Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y clang-format-12 clang-tidy-12
+      - uses: apache/skywalking-eyes/header@v0.4.0
+        with:
+          config: tools/ci/licenserc.yml
+      - name: Check with clang-format
+        id: check-format
+        run: ./x.py check format --clang-format-path clang-format-12
+      - name: Check with clang-tidy
+        run: |
+          ./x.py build --skip-build
+          ./x.py check tidy -j $(nproc) --clang-tidy-path clang-tidy-12 --run-clang-tidy-path run-clang-tidy-12
+      - name: Lint with golangci-lint
+        run: ./x.py check golangci-lint
+
+      - name: Prepare format patch
+        if: always() && steps.check-format.outcome != 'success'
+        run: |
+          ./x.py format --clang-format-path clang-format-12
+          git diff -p > clang-format.patch
+          cat clang-format.patch
+      - name: Upload format patch
+        uses: actions/upload-artifact@v3
+        if: always() && steps.check-format.outcome != 'success'
+        with:
+          path: clang-format.patch
+
+  build-and-test:
+    name: Build and test
+    needs: [check-and-lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Darwin Clang
+            os: macos-11
+            compiler: auto
+            with_openssl: -DENABLE_OPENSSL=ON
+          - name: Darwin Clang without Jemalloc
+            os: macos-11
+            compiler: auto
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+          - name: Ubuntu GCC
+            os: ubuntu-20.04
+            compiler: gcc
+            with_openssl: -DENABLE_OPENSSL=ON
+          - name: Ubuntu Clang
+            os: ubuntu-20.04
+            compiler: clang
+            with_openssl: -DENABLE_OPENSSL=ON
+          - name: Ubuntu GCC ASan
+            os: ubuntu-20.04
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_sanitizer: -DENABLE_ASAN=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+            compiler: gcc
+          - name: Ubuntu Clang ASan
+            os: ubuntu-20.04
+            with_sanitizer: -DENABLE_ASAN=ON
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+            compiler: clang
+          - name: Ubuntu GCC TSan
+            os: ubuntu-20.04
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+            with_sanitizer: -DENABLE_TSAN=ON
+            compiler: gcc
+            runtime_env_vars: TSAN_OPTIONS="suppressions=$(realpath ./tests/tsan-suppressions)"
+          - name: Ubuntu Clang TSan
+            os: ubuntu-20.04
+            with_sanitizer: -DENABLE_TSAN=ON
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+            compiler: clang
+            runtime_env_vars: TSAN_OPTIONS="suppressions=$(realpath ./tests/tsan-suppressions)"
+          - name: Ubuntu GCC Ninja
+            os: ubuntu-20.04
+            with_ninja: --ninja
+            with_openssl: -DENABLE_OPENSSL=ON
+            compiler: gcc
+          - name: Ubuntu GCC Ninja without Jemalloc
+            os: ubuntu-20.04
+            with_ninja: --ninja
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+            compiler: gcc
+          - name: Ubuntu GCC with luaJIT
+            os: ubuntu-20.04
+            with_openssl: -DENABLE_OPENSSL=ON
+            with_luajit: -DUSE_LUAJIT=ON
+            compiler: gcc
+          - name: Ubuntu GCC ASan with luaJIT
+            os: ubuntu-20.04
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_luajit: -DUSE_LUAJIT=ON
+            with_sanitizer: -DENABLE_ASAN=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+            compiler: gcc
+          - name: Ubuntu GCC TSan with luaJIT
+            os: ubuntu-20.04
+            without_jemalloc: -DDISABLE_JEMALLOC=ON
+            with_luajit: -DUSE_LUAJIT=ON
+            with_sanitizer: -DENABLE_TSAN=ON
+            with_openssl: -DENABLE_OPENSSL=ON
+            compiler: gcc
+          - name: Ubuntu GCC without OpenSSL
+            os: ubuntu-20.04
+            compiler: gcc
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Setup macOS
+        if: ${{ startsWith(matrix.os, 'macos') }}
+        run: |
+          brew install cmake gcc autoconf automake libtool openssl
+          echo "NPROC=$(sysctl -n hw.ncpu)" >> $GITHUB_ENV
+          echo "CMAKE_EXTRA_DEFS=-DOPENSSL_ROOT_DIR=/usr/local/opt/openssl" >> $GITHUB_ENV
+      - name: Setup Linux
+        if: ${{ startsWith(matrix.os, 'ubuntu') }}
+        run: |
+          sudo apt update
+          sudo apt install -y ninja-build
+          echo "NPROC=$(nproc)" >> $GITHUB_ENV
+
+      - name: Cache redis
+        id: cache-redis
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/local/bin/redis-cli
+          key: ${{ runner.os }}-redis-cli
+      - name: Install redis
+        if: steps.cache-redis.outputs.cache-hit != 'true'
+        run: |
+          curl -O https://download.redis.io/releases/redis-6.2.7.tar.gz
+          tar -xzvf redis-6.2.7.tar.gz
+          mkdir -p $HOME/local/bin
+          pushd redis-6.2.7 && BUILD_TLS=yes make -j$NPROC redis-cli && mv src/redis-cli $HOME/local/bin/ && popd
+
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: 3.x
+      - uses: actions/setup-go@v3
+        with:
+          go-version-file: 'tests/gocase/go.mod'
+
+      - name: Build Kvrocks
+        run: |
+          ./x.py build -j$NPROC --unittest --compiler ${{ matrix.compiler }} ${{ matrix.without_jemalloc }} ${{ matrix.with_luajit }} \
+            ${{ matrix.with_ninja }} ${{ matrix.with_sanitizer }} ${{ matrix.with_openssl }} ${{ env.CMAKE_EXTRA_DEFS }}
+      
+      - name: Setup Coredump
+        if: ${{ startsWith(matrix.os, 'ubuntu') }}
+        run: |
+          echo "$(pwd)/coredumps/corefile-%e-%p-%t" | sudo tee /proc/sys/kernel/core_pattern
+          mkdir coredumps
+
+      - name: Run Unit Test
+        run: |
+          ulimit -c unlimited
+          export ${{ matrix.runtime_env_vars }}
+          ./x.py test cpp
+
+      - name: Run Go Integration Cases
+        run: |
+          ulimit -c unlimited
+          export ${{ matrix.runtime_env_vars }}
+          export PATH=$PATH:$HOME/local/bin/
+          GOCASE_RUN_ARGS=""
+          if [[ -n "${{ matrix.with_openssl }}" ]] && [[ "${{ matrix.os }}" == ubuntu* ]]; then
+            git clone https://github.com/jsha/minica
+            cd minica && go build && cd ..
+            ./minica/minica --domains localhost
+            cp localhost/cert.pem tests/gocase/tls/cert/server.crt
+            cp localhost/key.pem tests/gocase/tls/cert/server.key
+            cp minica.pem tests/gocase/tls/cert/ca.crt
+            GOCASE_RUN_ARGS="-tlsEnable"
+          fi
+          ./x.py test go build $GOCASE_RUN_ARGS
+          
+      - name: Find reports and crashes
+        if: always()
+        run: |
+          SANITIZER_OUTPUT=$(grep "Sanitizer:" tests/gocase/workspace -r || true)
+          if [[ $SANITIZER_OUTPUT ]]; then
+            echo "found sanitizer reports:"
+            echo "$SANITIZER_OUTPUT"
+            echo "detail log:"
+            cat $(echo "$SANITIZER_OUTPUT" | awk -F ':' '{print $1}')
+            exit 1
+          fi
+          CRASHES=$(grep "Ooops!" tests/gocase/workspace -r || true)
+          if [[ $CRASHES ]]; then
+            echo "found crashes:"
+            echo "$CRASHES"
+            echo "detail log:"
+            cat $(echo "$CRASHES" | awk -F ':' '{print $1}')
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v3
+        if: ${{ failure() && startsWith(matrix.os, 'ubuntu') }}
+        with:
+          name: kvrocks-coredumps-${{ matrix.name }}
+          path: |
+            ./build/kvrocks
+            ./coredumps/*
+
+  required:
+    if: always()
+    name: Required
+    runs-on: ubuntu-latest
+    needs:
+      - build-and-test
+    steps:
+      - name: Merge requirement checking
+        run: |
+          build_and_test=${{ needs.build-and-test.result }}
+
+          if [[ $build_and_test != 'success' ]]; then
+            exit 1
+          fi
