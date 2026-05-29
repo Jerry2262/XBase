@@ -250,9 +250,9 @@ function(_brpc_add_ready_target target_name)
 endfunction()
 
 function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_dir)
-    set(options FORWARD_CPP_FLAGS)
+    set(options FORWARD_CPP_FLAGS USE_C)
     set(one_value_args SOURCE_SUBDIR LIBDIR)
-    set(multi_value_args CMAKE_ARGS DEPENDS BYPRODUCTS POST_INSTALL_COMMANDS)
+    set(multi_value_args CMAKE_ARGS DEPENDS BYPRODUCTS POST_INSTALL_COMMANDS PREFIX_PATHS)
     cmake_parse_arguments(arg "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
     set(_configure_source_dir "${source_dir}")
@@ -260,7 +260,7 @@ function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_
         set(_configure_source_dir "${source_dir}/${arg_SOURCE_SUBDIR}")
     endif()
 
-    set(_install_libdir "lib")
+    set(_install_libdir "")
     if(arg_LIBDIR)
         set(_install_libdir "${arg_LIBDIR}")
     endif()
@@ -281,25 +281,44 @@ function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_
             "-DCMAKE_CPP_FLAGS=${_brpc_forwarded_cpp_flags}")
     endif()
 
+    set(_brpc_cmake_args
+        -S "${_configure_source_dir}"
+        -B "${binary_dir}"
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        -DCMAKE_INSTALL_PREFIX=${install_dir}
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
+        -DCMAKE_POLICY_DEFAULT_CMP0090=NEW
+    )
+
+    if(arg_USE_C)
+        if(NOT "${CMAKE_C_COMPILER}" STREQUAL "")
+            list(APPEND _brpc_cmake_args -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER})
+        endif()
+        if(NOT "${CMAKE_C_FLAGS}" STREQUAL "")
+            list(APPEND _brpc_cmake_args "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}")
+        endif()
+    endif()
+
+    if(NOT "${_install_libdir}" STREQUAL "")
+        list(APPEND _brpc_cmake_args -DCMAKE_INSTALL_LIBDIR=${_install_libdir})
+    endif()
+
+    if(arg_PREFIX_PATHS)
+        list(JOIN arg_PREFIX_PATHS "\\;" _brpc_prefix_path)
+        list(APPEND _brpc_cmake_args "-DCMAKE_PREFIX_PATH=${_brpc_prefix_path}")
+    endif()
+
+    list(APPEND _brpc_cmake_args
+        ${_brpc_forwarded_cpp_flag_arg}
+        ${arg_CMAKE_ARGS}
+    )
+
     add_custom_command(
         OUTPUT ${arg_BYPRODUCTS}
         COMMAND ${CMAKE_COMMAND} -E make_directory "${binary_dir}"
         COMMAND ${CMAKE_COMMAND} -E echo "[brpc-deps] configuring ${target_name}"
-        COMMAND ${CMAKE_COMMAND}
-            -S "${_configure_source_dir}"
-            -B "${binary_dir}"
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo
-            -DCMAKE_INSTALL_PREFIX=${install_dir}
-            -DCMAKE_INSTALL_LIBDIR=${_install_libdir}
-            -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-            -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-            "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}"
-            "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
-            ${_brpc_forwarded_cpp_flag_arg}
-            -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON
-            -DCMAKE_EXPORT_PACKAGE_REGISTRY=OFF
-            -DCMAKE_POLICY_DEFAULT_CMP0090=NEW
-            ${arg_CMAKE_ARGS}
+        COMMAND ${CMAKE_COMMAND} ${_brpc_cmake_args}
         COMMAND ${CMAKE_COMMAND} -E echo "[brpc-deps] building ${target_name}"
         COMMAND ${CMAKE_COMMAND} --build "${binary_dir}" --parallel "${_brpc_build_jobs}"
         COMMAND ${CMAKE_COMMAND} -E echo "[brpc-deps] installing ${target_name} into ${install_dir}"
@@ -413,7 +432,6 @@ if(NOT brpc_FOUND)
             LIBDIR lib
             CMAKE_ARGS
                 -DBUILD_SHARED_LIBS=OFF
-                -DBUILD_TESTING=OFF
                 -DREGISTER_BUILD_DIR=OFF
                 -DREGISTER_INSTALL_PREFIX=OFF
             BYPRODUCTS
@@ -434,7 +452,6 @@ if(NOT brpc_FOUND)
             LIBDIR lib64
             CMAKE_ARGS
                 -DBUILD_SHARED_LIBS=OFF
-                -DBUILD_TESTING=OFF
                 -Dprotobuf_BUILD_TESTS=OFF
                 -Dprotobuf_BUILD_SHARED_LIBS=OFF
             BYPRODUCTS
@@ -457,7 +474,6 @@ if(NOT brpc_FOUND)
             "${leveldb_SOURCE_DIR}"
             "${CMAKE_BINARY_DIR}/_deps/leveldb-subbuild"
             "${LEVELDB_INSTALL_DIR}"
-            LIBDIR lib
             CMAKE_ARGS
                 -DBUILD_SHARED_LIBS=OFF
                 -DLEVELDB_BUILD_TESTS=OFF
@@ -479,12 +495,20 @@ if(NOT brpc_FOUND)
         "${CMAKE_BINARY_DIR}/_deps/brpc-subbuild"
         "${BRPC_INSTALL_DIR}"
         FORWARD_CPP_FLAGS
+        USE_C
         LIBDIR lib64
+        PREFIX_PATHS
+            "${GFLAGS_INSTALL_DIR}"
+            "${PROTOBUF_INSTALL_DIR}"
+            "${LEVELDB_INSTALL_DIR}"
         CMAKE_ARGS
             -DBUILD_SHARED_LIBS=OFF
-            "-DCMAKE_PREFIX_PATH=${GFLAGS_INSTALL_DIR};${PROTOBUF_INSTALL_DIR};${LEVELDB_INSTALL_DIR}"
-            -Dgflags_DIR=${GFLAGS_INSTALL_DIR}/lib/cmake/gflags
-            -DProtobuf_DIR=${PROTOBUF_INSTALL_DIR}/lib64/cmake/protobuf
+            -DBUILD_UNIT_TESTS=OFF
+            -DBUILD_FUZZ_TESTS=OFF
+            -DBUILD_BRPC_TOOLS=OFF
+            -DDOWNLOAD_GTEST=OFF
+            -DGFLAGS_INCLUDE_PATH=${GFLAGS_INCLUDE_DIR}
+            -DGFLAGS_LIBRARY=${GFLAGS_LIBRARY}
             -DProtobuf_INCLUDE_DIR=${PROTOBUF_INCLUDE_DIR}
             -DProtobuf_LIBRARY=${PROTOBUF_LIBRARY}
             -DProtobuf_PROTOC_LIBRARY=${PROTOBUF_PROTOC_LIBRARY}
