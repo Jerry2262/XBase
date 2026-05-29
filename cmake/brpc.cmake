@@ -430,9 +430,9 @@ if(NOT brpc_FOUND)
             "${gflags_SOURCE_DIR}"
             "${CMAKE_BINARY_DIR}/_deps/gflags-subbuild"
             "${GFLAGS_INSTALL_DIR}"
-            LIBDIR lib
             CMAKE_ARGS
                 -DBUILD_SHARED_LIBS=OFF
+                -DLIB_INSTALL_DIR=lib
                 -DREGISTER_BUILD_DIR=OFF
                 -DREGISTER_INSTALL_PREFIX=OFF
             BYPRODUCTS
