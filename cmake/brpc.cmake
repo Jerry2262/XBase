@@ -83,6 +83,7 @@ set(GFLAGS_INSTALL_DIR "${GFLAGS_ROOT}")
 set(PROTOBUF_INSTALL_DIR "${PROTOBUF_ROOT}")
 set(LEVELDB_INSTALL_DIR "${LEVELDB_ROOT}")
 set(BRPC_INSTALL_DIR "${BRPC_ROOT}")
+set(LEVELDB_INSTALL_LIBDIR "lib")
 
 if("${BRPC_LIBRARY}" STREQUAL "" AND EXISTS "${BRPC_ROOT}/lib64/libbrpc.a")
     set(BRPC_LIBRARY "${BRPC_ROOT}/lib64/libbrpc.a")
@@ -408,7 +409,7 @@ if(NOT brpc_FOUND)
         set(LEVELDB_INCLUDE_DIR "${_resolved_leveldb_include}")
     else()
         set(_build_leveldb TRUE)
-        set(LEVELDB_LIBRARY "${LEVELDB_INSTALL_DIR}/lib/libleveldb.a")
+        set(LEVELDB_LIBRARY "${LEVELDB_INSTALL_DIR}/${LEVELDB_INSTALL_LIBDIR}/libleveldb.a")
         set(LEVELDB_INCLUDE_DIR "${LEVELDB_INSTALL_DIR}/include")
     endif()
 
@@ -474,6 +475,7 @@ if(NOT brpc_FOUND)
             "${leveldb_SOURCE_DIR}"
             "${CMAKE_BINARY_DIR}/_deps/leveldb-subbuild"
             "${LEVELDB_INSTALL_DIR}"
+            LIBDIR ${LEVELDB_INSTALL_LIBDIR}
             CMAKE_ARGS
                 -DBUILD_SHARED_LIBS=OFF
                 -DLEVELDB_BUILD_TESTS=OFF
