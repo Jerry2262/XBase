@@ -499,11 +499,18 @@ rocksdb::Status Hash::GetAll(const Slice &user_key, std::vector<FieldValue> *fie
     entries.emplace_back(std::move(fv));
   }
 
+  for (auto &entry : entries) {
+    const auto cache_key = HashCacheKey(ns_key, entry.field);
+    std::string cached_value;
+    if (storage_->Cache().TryGet(cache_key, &cached_value)) {
+      entry.value = std::move(cached_value);
+    } else if (cacheable) {
+      storage_->Cache().Put(cache_key, entry.value);
+    }
+  }
+
   if (cacheable && !entries.empty()) {
     storage_->Cache().Put(HashAllCacheKey(ns_key), EncodeHashFieldValues(entries));
-    for (const auto &entry : entries) {
-      storage_->Cache().Put(HashCacheKey(ns_key, entry.field), entry.value);
-    }
   } else {
     storage_->Cache().Remove(HashAllCacheKey(ns_key));
   }
