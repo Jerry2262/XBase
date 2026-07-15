@@ -18,6 +18,8 @@
  *
  */
 
+#include <cerrno>
+
 #include <glog/logging.h>
 #include <rocksdb/iostats_context.h>
 #include <rocksdb/perf_context.h>
@@ -26,6 +28,7 @@
 #endif
 
 #include "redis_connection.h"
+
 #include "server.h"
 #include "tls_util.h"
 #include "worker.h"
@@ -105,12 +108,18 @@ void Connection::OnWrite(struct bufferevent *bev, void *ctx) {
 void Connection::OnEvent(bufferevent *bev, int16_t events, void *ctx) {
   auto conn = static_cast<Connection *>(ctx);
   if (events & BEV_EVENT_ERROR) {
-    LOG(ERROR) << "[connection] Going to remove the client: " << conn->GetAddr()
-               << ", while encounter error: " << evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())
+    const auto socket_error = EVUTIL_SOCKET_ERROR();
+    if (socket_error == ECONNRESET) {
+      DLOG(INFO) << "[connection] Going to remove the client: " << conn->GetAddr()
+                 << ", while closed by client: " << evutil_socket_error_to_string(socket_error);
+    } else {
+      LOG(ERROR) << "[connection] Going to remove the client: " << conn->GetAddr()
+                 << ", while encounter error: " << evutil_socket_error_to_string(socket_error)
 #ifdef ENABLE_OPENSSL
-               << ", SSL Error: " << SSLError(bufferevent_get_openssl_error(bev))  // NOLINT
+                 << ", SSL Error: " << SSLError(bufferevent_get_openssl_error(bev))  // NOLINT
 #endif
-        ;  // NOLINT
+          ;  // NOLINT
+    }
     conn->Close();
     return;
   }
