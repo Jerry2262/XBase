@@ -22,6 +22,7 @@
 #include <brpc/controller.h>
 #include <brpc/redis.h>
 #include <brpc/server.h>
+#include <butil/endpoint.h>
 #include <glog/logging.h>
 
 #include <memory>
@@ -233,13 +234,19 @@ Status brpc_server_start() {
     options.num_threads = g_config->datanode_brpc_num_threads;
   }
 
+  const std::string bind = g_config->binds.empty() ? "0.0.0.0" : g_config->binds.front();
   const int port = g_config->GetDatanodeListenPort();
-  if (g_brpc_server->Start(port, &options) != 0) {
-    LOG(ERROR) << "Failed to start brpc redis server on port " << port;
+  butil::EndPoint endpoint;
+  if (butil::str2endpoint(bind.c_str(), port, &endpoint) != 0) {
+    LOG(ERROR) << "Invalid brpc redis server bind address " << bind << ":" << port;
+    return {Status::NotOK, "invalid brpc redis server bind address"};
+  }
+  if (g_brpc_server->Start(endpoint, &options) != 0) {
+    LOG(ERROR) << "Failed to start brpc redis server on " << endpoint;
     return {Status::NotOK, "failed to start brpc redis server"};
   }
 
-  LOG(INFO) << "Brpc server started on port " << port;
+  LOG(INFO) << "Brpc server started on " << endpoint;
   return Status::OK();
 }
 
