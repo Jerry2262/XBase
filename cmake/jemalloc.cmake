@@ -28,12 +28,14 @@ FetchContent_GetProperties(jemalloc)
 if(NOT jemalloc_POPULATED)
   FetchContent_Populate(jemalloc)
 
-  execute_process(COMMAND autoconf
-    WORKING_DIRECTORY ${jemalloc_SOURCE_DIR}
-  )
-  execute_process(COMMAND ${jemalloc_SOURCE_DIR}/configure CC=${CMAKE_C_COMPILER} "CFLAGS=${CMAKE_C_FLAGS}" -C --enable-autogen --disable-libdl --with-jemalloc-prefix=""
-    WORKING_DIRECTORY ${jemalloc_BINARY_DIR}
-  )
+  if(NOT EXISTS "${jemalloc_BINARY_DIR}/Makefile")
+    execute_process(COMMAND autoconf
+      WORKING_DIRECTORY ${jemalloc_SOURCE_DIR}
+    )
+    execute_process(COMMAND ${jemalloc_SOURCE_DIR}/configure CC=${CMAKE_C_COMPILER} "CFLAGS=${CMAKE_C_FLAGS}" -C --enable-autogen --disable-libdl --with-jemalloc-prefix=""
+      WORKING_DIRECTORY ${jemalloc_BINARY_DIR}
+    )
+  endif()
   add_custom_target(make_jemalloc 
     COMMAND make
     WORKING_DIRECTORY ${jemalloc_BINARY_DIR}

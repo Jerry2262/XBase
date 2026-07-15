@@ -18,7 +18,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(kvrocks
         DESCRIPTION "NoSQL which based on rocksdb and compatible with the Redis protocol"
-        LANGUAGES CXX)
+        LANGUAGES C CXX)
 
 option(DISABLE_JEMALLOC "disable use of the jemalloc library" OFF)
 option(ENABLE_ASAN "enable address santinizer" OFF)

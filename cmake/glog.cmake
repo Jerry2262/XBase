@@ -30,3 +30,5 @@ FetchContent_MakeAvailableWithArgs(glog
   BUILD_SHARED_LIBS=OFF
   WITH_UNWIND=${ENABLE_UNWIND}
 )
+
+include_directories(SYSTEM ${glog_BINARY_DIR} ${glog_SOURCE_DIR}/src)

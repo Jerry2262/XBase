@@ -553,7 +553,7 @@ if(brpc_FOUND)
     endif()
 
     add_library(brpc_with_headers INTERFACE)
-    target_include_directories(brpc_with_headers INTERFACE
+    target_include_directories(brpc_with_headers SYSTEM INTERFACE
         ${BRPC_INCLUDE_DIR}
         ${GFLAGS_INCLUDE_DIR}
         ${PROTOBUF_INCLUDE_DIR}
