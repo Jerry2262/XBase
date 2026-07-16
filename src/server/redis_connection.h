@@ -104,6 +104,8 @@ class Connection {
   evbuffer *Output() { return bufferevent_get_output(bev_); }
   bufferevent *GetBufferEvent() { return bev_; }
   void ExecuteCommands(std::deque<CommandTokens> *to_process_cmds);
+  void OnProxyCommandCompletion(Status status, std::string reply);
+  bool IsProxyCommandPending() const { return proxy_command_pending_; }
   bool isProfilingEnabled(const std::string &cmd);
   void recordProfilingSampleIfNeed(const std::string &cmd, uint64_t duration);
   void SetImporting() { importing_ = true; }
@@ -146,5 +148,6 @@ class Connection {
   std::deque<Redis::CommandTokens> multi_cmds_;
 
   bool importing_ = false;
+  bool proxy_command_pending_ = false;
 };
 }  // namespace Redis

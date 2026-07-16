@@ -18,6 +18,7 @@
  *
  */
 
+#include <event2/thread.h>
 #include <gtest/gtest.h>
 
 #include "server/server.h"
@@ -28,5 +29,6 @@ int main(int argc, char **argv) {
   testing::InitGoogleTest(&argc, argv);
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
+  if (evthread_use_pthreads() != 0) return 1;
   return RUN_ALL_TESTS();
 }

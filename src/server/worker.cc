@@ -50,6 +50,9 @@ Worker::Worker(Server *svr, Config *config, bool repl) : svr_(svr) {
   base_ = event_base_new();
   if (!base_) throw std::exception();
 
+  completion_queue_ = std::make_shared<WorkerCompletionQueue>(
+      base_, [this](ProxyCommandCompletion completion) { OnProxyCommandCompletion(std::move(completion)); });
+
   timer_ = event_new(base_, -1, EV_PERSIST, TimerCB, this);
   timeval tm = {10, 0};
   evtimer_add(timer_, &tm);
@@ -81,6 +84,8 @@ Worker::~Worker() {
   for (const auto &iter : conns) {
     iter->Close();
   }
+  completion_queue_->Stop();
+  completion_queue_.reset();
   event_free(timer_);
   if (rate_limit_group_ != nullptr) {
     bufferevent_rate_limit_group_free(rate_limit_group_);
@@ -275,11 +280,26 @@ void Worker::Run(std::thread::id tid) {
 }
 
 void Worker::Stop() {
+  completion_queue_->Stop();
   event_base_loopbreak(base_);
   for (const auto &lev : listen_events_) {
     evutil_socket_t fd = evconnlistener_get_fd(lev);
     if (fd > 0) close(fd);
     evconnlistener_free(lev);
+  }
+}
+
+void Worker::OnProxyCommandCompletion(ProxyCommandCompletion completion) {
+  Redis::Connection *connection = nullptr;
+  {
+    std::lock_guard<std::mutex> guard(conns_mu_);
+    auto iter = conns_.find(completion.fd);
+    if (iter != conns_.end() && iter->second->GetID() == completion.connection_id) {
+      connection = iter->second;
+    }
+  }
+  if (connection != nullptr) {
+    connection->OnProxyCommandCompletion(std::move(completion.status), std::move(completion.reply));
   }
 }
 

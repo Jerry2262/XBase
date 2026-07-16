@@ -18,17 +18,16 @@
  *
  */
 
-#include <cerrno>
-
 #include <glog/logging.h>
 #include <rocksdb/iostats_context.h>
 #include <rocksdb/perf_context.h>
+
+#include <cerrno>
 #ifdef ENABLE_OPENSSL
 #include <event2/bufferevent_ssl.h>
 #endif
 
 #include "redis_connection.h"
-
 #include "server.h"
 #include "tls_util.h"
 #include "worker.h"
@@ -93,6 +92,7 @@ void Connection::OnRead(struct bufferevent *bev, void *ctx) {
     return;
   }
   conn->ExecuteCommands(conn->req_.GetCommands());
+  if (conn->IsProxyCommandPending()) return;
   if (conn->IsFlagEnabled(kCloseAsync)) {
     conn->Close();
   }
@@ -305,6 +305,8 @@ void Connection::recordProfilingSampleIfNeed(const std::string &cmd, uint64_t du
 }
 
 void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
+  if (proxy_command_pending_) return;
+
   Config *config = svr_->GetConfig();
   std::string reply, password = config->requirepass;
 
@@ -409,15 +411,23 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
         continue;
       }
 
-      s = svr_->DispatchProxyCommand(*attributes, cmd_tokens, GetNamespace(), &reply);
+      auto completion_queue = owner_->CompletionQueue();
+      const int fd = GetFD();
+      const uint64_t connection_id = GetID();
+      s = svr_->DispatchProxyCommandAsync(
+          *attributes, cmd_tokens, GetNamespace(),
+          [completion_queue, fd, connection_id](Status status, std::string response) mutable {
+            if (auto queue = completion_queue.lock()) {
+              queue->Post({fd, connection_id, std::move(status), std::move(response)});
+            }
+          });
       if (!s.IsOK()) {
         Reply(Redis::Error("ERR " + s.Msg()));
         continue;
       }
-
-      if (!reply.empty()) Reply(reply);
-      reply.clear();
-      continue;
+      proxy_command_pending_ = true;
+      bufferevent_disable(bev_, EV_READ);
+      return;
     }
 
     // We don't execute commands, but queue them, ant then execute in EXEC command
@@ -463,6 +473,36 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
     }
     if (!reply.empty()) Reply(reply);
     reply.clear();
+  }
+}
+
+void Connection::OnProxyCommandCompletion(Status status, std::string reply) {
+  if (!proxy_command_pending_) return;
+  proxy_command_pending_ = false;
+
+  if (!status.IsOK()) {
+    Reply(Redis::Error("ERR " + status.Msg()));
+  } else if (!reply.empty()) {
+    Reply(reply);
+  }
+
+  if (IsFlagEnabled(kCloseAsync)) {
+    Close();
+    return;
+  }
+  if (IsFlagEnabled(kCloseAfterReply)) return;
+
+  ExecuteCommands(req_.GetCommands());
+  if (proxy_command_pending_) return;
+  if (IsFlagEnabled(kCloseAsync)) {
+    Close();
+    return;
+  }
+  if (IsFlagEnabled(kCloseAfterReply)) return;
+
+  bufferevent_enable(bev_, EV_READ);
+  if (evbuffer_get_length(Input()) != 0) {
+    bufferevent_trigger(bev_, EV_READ, BEV_TRIG_DEFER_CALLBACKS);
   }
 }
 

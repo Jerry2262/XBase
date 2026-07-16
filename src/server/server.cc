@@ -88,6 +88,19 @@ Status EncodeMultiResultReply(const Dispatcher::MultiRequestResult &result, std:
   return Status::OK();
 }
 
+template <typename Result, typename Encoder>
+auto MakeProxyResultCallback(Server::ProxyCommandCallback callback, Encoder encoder) {
+  return [callback = std::move(callback), encoder = std::move(encoder)](StatusOr<Result> result) mutable {
+    if (!result.IsOK()) {
+      callback(result.ToStatus(), {});
+      return;
+    }
+    std::string reply;
+    auto status = encoder(*result, &reply);
+    callback(std::move(status), std::move(reply));
+  };
+}
+
 #endif
 
 }  // namespace
@@ -258,8 +271,9 @@ Status Server::LocalStorageUnavailable(const std::string &operation) const {
   return Status(Status::NotOK, operation + " is disabled in proxy mode");
 }
 
-Status Server::DispatchProxyCommand(const Redis::CommandAttributes &attributes, const std::vector<std::string> &cmd_tokens,
-                                    const std::string &ns, std::string *reply) const {
+Status Server::DispatchProxyCommand(const Redis::CommandAttributes &attributes,
+                                    const std::vector<std::string> &cmd_tokens, const std::string &ns,
+                                    std::string *reply) const {
 #ifndef BRPC_FOUND
   return {Status::RedisExecErr, "proxy request dispatch requires brpc support"};
 #else
@@ -282,8 +296,8 @@ Status Server::DispatchProxyCommand(const Redis::CommandAttributes &attributes, 
     return EncodeSingleResultReply(*result, true, reply);
   }
   if (command_name == "set") {
-    auto result =
-        request_dispatcher_->DispatchRequest(Dispatcher::StringSetRequest(ns, cmd_tokens[1], cmd_tokens[2], command_flags));
+    auto result = request_dispatcher_->DispatchRequest(
+        Dispatcher::StringSetRequest(ns, cmd_tokens[1], cmd_tokens[2], command_flags));
     if (!result.IsOK()) return result.ToStatus();
     return EncodeSingleResultReply(*result, false, reply);
   }
@@ -394,6 +408,148 @@ Status Server::DispatchProxyCommand(const Redis::CommandAttributes &attributes, 
     auto result = request_dispatcher_->DispatchIntegerCommand("ZREM", ns, args, {0}, command_flags);
     if (!result.IsOK()) return result.ToStatus();
     return EncodeSingleResultReply(*result, false, reply);
+  }
+
+  return {Status::RedisUnknownCmd, "command " + command_name + " is not supported by proxy dispatcher"};
+#endif
+}
+
+Status Server::DispatchProxyCommandAsync(const Redis::CommandAttributes &attributes,
+                                         const std::vector<std::string> &cmd_tokens, const std::string &ns,
+                                         ProxyCommandCallback callback) const {
+#ifndef BRPC_FOUND
+  return {Status::RedisExecErr, "proxy request dispatch requires brpc support"};
+#else
+  if (HasLocalStorage()) {
+    return {Status::RedisExecErr, "proxy request dispatch is only available in proxy mode"};
+  }
+  if (!callback) {
+    return {Status::RedisExecErr, "proxy response callback is required"};
+  }
+  if (!request_dispatcher_ || request_dispatcher_->init_result() != 0) {
+    return {Status::RedisExecErr, "request dispatcher is not initialized"};
+  }
+
+  const auto &command_name = attributes.name;
+  const uint64_t command_flags = attributes.flags;
+  auto encode_bulk = [](const Dispatcher::RequestResult &result, std::string *reply) {
+    return EncodeSingleResultReply(result, true, reply);
+  };
+  auto encode_scalar = [](const Dispatcher::RequestResult &result, std::string *reply) {
+    return EncodeSingleResultReply(result, false, reply);
+  };
+  auto encode_multi = [](const Dispatcher::MultiRequestResult &result, std::string *reply) {
+    return EncodeMultiResultReply(result, reply);
+  };
+
+  if (command_name == "get") {
+    return request_dispatcher_->DispatchRequestAsync(
+        Dispatcher::StringGetRequest(ns, cmd_tokens[1], command_flags),
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_bulk));
+  }
+  if (command_name == "set") {
+    return request_dispatcher_->DispatchRequestAsync(
+        Dispatcher::StringSetRequest(ns, cmd_tokens[1], cmd_tokens[2], command_flags),
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_scalar));
+  }
+  if (command_name == "mget") {
+    Dispatcher::MultiGetRequest request;
+    request.ns = ns;
+    request.command_flags = command_flags;
+    request.keys.assign(cmd_tokens.begin() + 1, cmd_tokens.end());
+    return request_dispatcher_->DispatchRequestAsync(
+        request, MakeProxyResultCallback<Dispatcher::MultiRequestResult>(std::move(callback), encode_multi));
+  }
+  if (command_name == "mset") {
+    Dispatcher::MultiSetRequest request;
+    request.ns = ns;
+    request.command_flags = command_flags;
+    request.key_values.reserve((cmd_tokens.size() - 1) / 2);
+    for (size_t i = 1; i + 1 < cmd_tokens.size(); i += 2) {
+      request.key_values.emplace_back(cmd_tokens[i], cmd_tokens[i + 1]);
+    }
+    return request_dispatcher_->DispatchRequestAsync(
+        request, MakeProxyResultCallback<Dispatcher::MultiRequestResult>(std::move(callback), encode_multi));
+  }
+  if (command_name == "del") {
+    std::vector<std::string> args(cmd_tokens.begin() + 1, cmd_tokens.end());
+    std::vector<size_t> key_arg_indexes(args.size());
+    std::iota(key_arg_indexes.begin(), key_arg_indexes.end(), 0);
+    return request_dispatcher_->DispatchIntegerCommandAsync(
+        "DEL", ns, args, key_arg_indexes, command_flags,
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_scalar));
+  }
+  if (command_name == "hget") {
+    return request_dispatcher_->DispatchRequestAsync(
+        Dispatcher::HashGetRequest(ns, cmd_tokens[1], cmd_tokens[2], command_flags),
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_bulk));
+  }
+  if (command_name == "hmget") {
+    std::vector<std::string> args(cmd_tokens.begin() + 1, cmd_tokens.end());
+    return request_dispatcher_->DispatchArrayCommandAsync(
+        "HMGET", ns, args, {0}, command_flags,
+        MakeProxyResultCallback<Dispatcher::MultiRequestResult>(std::move(callback), encode_multi));
+  }
+  if (command_name == "hset") {
+    return request_dispatcher_->DispatchRequestAsync(
+        Dispatcher::HashSetRequest(ns, cmd_tokens[1], cmd_tokens[2], cmd_tokens[3], command_flags),
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_scalar));
+  }
+  if (command_name == "hmset") {
+    std::vector<std::string> args(cmd_tokens.begin() + 1, cmd_tokens.end());
+    return request_dispatcher_->DispatchStatusCommandAsync(
+        "HMSET", ns, args, {0}, command_flags,
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_scalar));
+  }
+  if (command_name == "hgetall") {
+    std::vector<std::string> args(cmd_tokens.begin() + 1, cmd_tokens.end());
+    return request_dispatcher_->DispatchArrayCommandAsync(
+        "HGETALL", ns, args, {0}, command_flags,
+        MakeProxyResultCallback<Dispatcher::MultiRequestResult>(std::move(callback), encode_multi));
+  }
+  if (command_name == "lindex") {
+    auto index = ParseInt<int>(cmd_tokens[2], 10);
+    if (!index) return MakeProxyDispatchParseError("value is not an integer or out of range");
+    return request_dispatcher_->DispatchRequestAsync(
+        Dispatcher::ListGetRequest(ns, cmd_tokens[1], *index, command_flags),
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_bulk));
+  }
+  if (command_name == "lset") {
+    auto index = ParseInt<int>(cmd_tokens[2], 10);
+    if (!index) return MakeProxyDispatchParseError("value is not an integer or out of range");
+    return request_dispatcher_->DispatchRequestAsync(
+        Dispatcher::ListSetRequest(ns, cmd_tokens[1], *index, cmd_tokens[3], command_flags),
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_scalar));
+  }
+  if (command_name == "zadd") {
+    std::vector<std::string> args(cmd_tokens.begin() + 1, cmd_tokens.end());
+    bool zadd_returns_bulk_string = false;
+    for (size_t i = 2; i < cmd_tokens.size(); ++i) {
+      const auto option = Util::ToLower(cmd_tokens[i]);
+      if (option == "incr") {
+        zadd_returns_bulk_string = true;
+      } else if (option != "xx" && option != "nx" && option != "ch" && option != "lt" && option != "gt") {
+        break;
+      }
+    }
+    auto encoder = [zadd_returns_bulk_string](const Dispatcher::RequestResult &result, std::string *reply) {
+      return EncodeSingleResultReply(result, zadd_returns_bulk_string, reply);
+    };
+    return request_dispatcher_->DispatchSingleCommandAsync(
+        "ZADD", ns, args, {0}, command_flags,
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), std::move(encoder)));
+  }
+  if (command_name == "zrangebyscore") {
+    std::vector<std::string> args(cmd_tokens.begin() + 1, cmd_tokens.end());
+    return request_dispatcher_->DispatchArrayCommandAsync(
+        "ZRANGEBYSCORE", ns, args, {0}, command_flags,
+        MakeProxyResultCallback<Dispatcher::MultiRequestResult>(std::move(callback), encode_multi));
+  }
+  if (command_name == "zrem") {
+    std::vector<std::string> args(cmd_tokens.begin() + 1, cmd_tokens.end());
+    return request_dispatcher_->DispatchIntegerCommandAsync(
+        "ZREM", ns, args, {0}, command_flags,
+        MakeProxyResultCallback<Dispatcher::RequestResult>(std::move(callback), encode_scalar));
   }
 
   return {Status::RedisUnknownCmd, "command " + command_name + " is not supported by proxy dispatcher"};

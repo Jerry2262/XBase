@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "redis_connection.h"
+#include "server/worker_completion_queue.h"
 #include "storage/storage.h"
 
 class Server;
@@ -58,6 +59,8 @@ class Worker {
   Status Reply(int fd, const std::string &reply);
   void BecomeMonitorConn(Redis::Connection *conn);
   void FeedMonitorConns(Redis::Connection *conn, const std::vector<std::string> &tokens);
+  std::weak_ptr<WorkerCompletionQueue> CompletionQueue() const { return completion_queue_; }
+  void OnProxyCommandCompletion(ProxyCommandCompletion completion);
 
   std::string GetClientsStr();
   void KillClient(Redis::Connection *self, uint64_t id, std::string addr, uint64_t type, bool skipme, int64_t *killed);
@@ -77,6 +80,7 @@ class Worker {
   Redis::Connection *removeConnection(int fd);
 
   event_base *base_;
+  std::shared_ptr<WorkerCompletionQueue> completion_queue_;
   event *timer_;
   std::thread::id tid_;
   std::vector<evconnlistener *> listen_events_;

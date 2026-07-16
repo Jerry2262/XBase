@@ -20,14 +20,14 @@
 
 #include "dispatcher/request_dispatcher.h"
 
+#include <brpc/redis.h>
+#include <butil/strings/string_piece.h>
+
 #include <array>
 #include <cstddef>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <butil/strings/string_piece.h>
-#include <brpc/redis.h>
 
 #include "brpc_client/brpc_client.h"
 #include "cluster/redis_slot.h"
@@ -184,16 +184,26 @@ Status InvalidRequest(const char *command_name, const char *message) {
 }
 
 // proxy 与 datanode 之间约定：把 Commander 原始 flags 作为命令末尾的内部十进制参数透传。
-std::string EncodeCommandFlags(uint64_t command_flags) {
-  return std::to_string(command_flags);
+std::string EncodeCommandFlags(uint64_t command_flags) { return std::to_string(command_flags); }
+
+template <typename Result, typename Callback, typename Parser>
+BrpcClient::ResponseCallback MakeAsyncResponseCallback(Callback callback, Parser parser) {
+  return [callback = std::move(callback), parser = std::move(parser)](Status status,
+                                                                      const brpc::RedisResponse &response) mutable {
+    if (!status.IsOK()) {
+      callback(StatusOr<Result>(std::move(status)));
+      return;
+    }
+    callback(parser(response));
+  };
 }
 
 }  // namespace
 
 // 初始化远端 Redis brpc 通道，后续所有命令分发都复用该连接配置。
 RequestDispatcher::RequestDispatcher(const Config &config) : slot_id_encoded_(config.slot_id_encoded) {
-  init_result_ = brpc_client_init(config.storage_backend_addrs.c_str(), config.storage_rpc_connection_type.c_str(),
-                                  config.storage_rpc_timeout_ms, config.storage_rpc_max_retry);
+  init_result_ = brpc_client_.Init(config.storage_backend_addrs.c_str(), config.storage_rpc_connection_type.c_str(),
+                                   config.storage_rpc_timeout_ms, config.storage_rpc_max_retry);
 }
 
 Status RequestDispatcher::ExecuteRedisCommand(const brpc::RedisRequest &redis_request,
@@ -201,7 +211,12 @@ Status RequestDispatcher::ExecuteRedisCommand(const brpc::RedisRequest &redis_re
   if (redis_response == nullptr) {
     return Status(Status::RedisExecErr, "redis response output is required");
   }
-  return brpc_request_sync(redis_request, redis_response);
+  return brpc_client_.RequestSync(redis_request, redis_response);
+}
+
+Status RequestDispatcher::ExecuteRedisCommandAsync(brpc::RedisRequest redis_request,
+                                                   BrpcClient::ResponseCallback callback) const {
+  return brpc_client_.RequestAsync(std::move(redis_request), std::move(callback));
 }
 
 // 处理所有单 key 的读请求，根据数据结构类型翻译成不同 Redis 命令。
@@ -265,6 +280,50 @@ StatusOr<RequestResult> RequestDispatcher::DispatchRequest(const GetRequestComma
   }
 
   return Status(Status::RedisExecErr, "unsupported GET request structure");
+}
+
+Status RequestDispatcher::DispatchRequestAsync(const GetRequestCommand &request, RequestResultCallback callback) const {
+  if (request.kind != RequestKind::kGet) return InvalidRequest("GET", "kind mismatch");
+
+  brpc::RedisRequest redis_request;
+  switch (request.structure) {
+    case DataStructureType::kString: {
+      const auto *string_request = dynamic_cast<const StringGetRequest *>(&request);
+      if (!string_request) return InvalidRequest("GET", "does not match string request payload");
+      auto remote_key = ComposeRemoteKey(string_request->ns, string_request->key);
+      auto command_flags = EncodeCommandFlags(string_request->command_flags);
+      if (!redis_request.AddCommand("GET %b %s", remote_key.data(), remote_key.size(), command_flags.c_str())) {
+        return Status(Status::RedisExecErr, "failed to build GET request");
+      }
+      break;
+    }
+    case DataStructureType::kHash: {
+      const auto *hash_request = dynamic_cast<const HashGetRequest *>(&request);
+      if (!hash_request) return InvalidRequest("GET", "does not match hash request payload");
+      auto remote_key = ComposeRemoteKey(hash_request->ns, hash_request->key);
+      auto command_flags = EncodeCommandFlags(hash_request->command_flags);
+      if (!redis_request.AddCommand("HGET %b %b %s", remote_key.data(), remote_key.size(), hash_request->field.data(),
+                                    hash_request->field.size(), command_flags.c_str())) {
+        return Status(Status::RedisExecErr, "failed to build HGET request");
+      }
+      break;
+    }
+    case DataStructureType::kList: {
+      const auto *list_request = dynamic_cast<const ListGetRequest *>(&request);
+      if (!list_request) return InvalidRequest("GET", "does not match list request payload");
+      auto remote_key = ComposeRemoteKey(list_request->ns, list_request->key);
+      auto command_flags = EncodeCommandFlags(list_request->command_flags);
+      if (!redis_request.AddCommand("LINDEX %b %d %s", remote_key.data(), remote_key.size(), list_request->index,
+                                    command_flags.c_str())) {
+        return Status(Status::RedisExecErr, "failed to build LINDEX request");
+      }
+      break;
+    }
+  }
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      MakeAsyncResponseCallback<RequestResult>(
+          std::move(callback), [](const brpc::RedisResponse &response) { return ParseGetResponse(response); }));
 }
 
 // 处理所有单 key 写请求，根据数据结构类型翻译成 SET/HSET/LSET。
@@ -333,6 +392,62 @@ StatusOr<RequestResult> RequestDispatcher::DispatchRequest(const SetRequestComma
   return Status(Status::RedisExecErr, "unsupported SET request structure");
 }
 
+Status RequestDispatcher::DispatchRequestAsync(const SetRequestCommand &request, RequestResultCallback callback) const {
+  if (request.kind != RequestKind::kSet) return InvalidRequest("SET", "kind mismatch");
+
+  brpc::RedisRequest redis_request;
+  std::string response_command;
+  bool integer_response = false;
+  switch (request.structure) {
+    case DataStructureType::kString: {
+      const auto *string_request = dynamic_cast<const StringSetRequest *>(&request);
+      if (!string_request) return InvalidRequest("SET", "does not match string request payload");
+      auto remote_key = ComposeRemoteKey(string_request->ns, string_request->key);
+      auto command_flags = EncodeCommandFlags(string_request->command_flags);
+      if (!redis_request.AddCommand("SET %b %b %s", remote_key.data(), remote_key.size(), string_request->value.data(),
+                                    string_request->value.size(), command_flags.c_str())) {
+        return Status(Status::RedisExecErr, "failed to build SET request");
+      }
+      response_command = "SET";
+      break;
+    }
+    case DataStructureType::kHash: {
+      const auto *hash_request = dynamic_cast<const HashSetRequest *>(&request);
+      if (!hash_request) return InvalidRequest("SET", "does not match hash request payload");
+      auto remote_key = ComposeRemoteKey(hash_request->ns, hash_request->key);
+      auto command_flags = EncodeCommandFlags(hash_request->command_flags);
+      std::array<butil::StringPiece, 5> components = {
+          butil::StringPiece("HSET"), butil::StringPiece(remote_key), butil::StringPiece(hash_request->field),
+          butil::StringPiece(hash_request->value), butil::StringPiece(command_flags)};
+      if (!redis_request.AddCommandByComponents(components.data(), components.size())) {
+        return Status(Status::RedisExecErr, "failed to build HSET request");
+      }
+      response_command = "HSET";
+      integer_response = true;
+      break;
+    }
+    case DataStructureType::kList: {
+      const auto *list_request = dynamic_cast<const ListSetRequest *>(&request);
+      if (!list_request) return InvalidRequest("SET", "does not match list request payload");
+      auto remote_key = ComposeRemoteKey(list_request->ns, list_request->key);
+      auto command_flags = EncodeCommandFlags(list_request->command_flags);
+      if (!redis_request.AddCommand("LSET %b %d %b %s", remote_key.data(), remote_key.size(), list_request->index,
+                                    list_request->value.data(), list_request->value.size(), command_flags.c_str())) {
+        return Status(Status::RedisExecErr, "failed to build LSET request");
+      }
+      response_command = "LSET";
+      break;
+    }
+  }
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  MakeAsyncResponseCallback<RequestResult>(
+                                      std::move(callback), [response_command = std::move(response_command),
+                                                            integer_response](const brpc::RedisResponse &response) {
+                                        return integer_response ? ParseIntegerResponse(response, response_command)
+                                                                : ParseSetResponse(response, response_command);
+                                      }));
+}
+
 // 处理批量读取请求，对多个 key 统一拼装一条 MGET。
 StatusOr<MultiRequestResult> RequestDispatcher::DispatchRequest(const MultiGetRequest &request) const {
   if (request.keys.empty()) {
@@ -359,6 +474,31 @@ StatusOr<MultiRequestResult> RequestDispatcher::DispatchRequest(const MultiGetRe
   auto s = ExecuteRedisCommand(redis_request, &redis_response);
   if (!s.IsOK()) return s;
   return ParseMGetResponse(redis_response);
+}
+
+Status RequestDispatcher::DispatchRequestAsync(const MultiGetRequest &request,
+                                               MultiRequestResultCallback callback) const {
+  if (request.keys.empty()) return Status(Status::RedisExecErr, "MGET requires at least one key");
+
+  brpc::RedisRequest redis_request;
+  std::vector<std::string> remote_keys;
+  std::vector<butil::StringPiece> components;
+  remote_keys.reserve(request.keys.size());
+  components.reserve(request.keys.size() + 2);
+  components.emplace_back("MGET");
+  for (const auto &key : request.keys) {
+    remote_keys.emplace_back(ComposeRemoteKey(request.ns, key));
+    components.emplace_back(remote_keys.back());
+  }
+  auto command_flags = EncodeCommandFlags(request.command_flags);
+  components.emplace_back(command_flags);
+  if (!redis_request.AddCommandByComponents(components.data(), components.size())) {
+    return Status(Status::RedisExecErr, "failed to build MGET request");
+  }
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      MakeAsyncResponseCallback<MultiRequestResult>(
+          std::move(callback), [](const brpc::RedisResponse &response) { return ParseMGetResponse(response); }));
 }
 
 // 处理批量写入请求，对多个 key/value 统一拼装一条 MSET。
@@ -388,6 +528,34 @@ StatusOr<MultiRequestResult> RequestDispatcher::DispatchRequest(const MultiSetRe
   auto s = ExecuteRedisCommand(redis_request, &redis_response);
   if (!s.IsOK()) return s;
   return ParseMSetResponse(redis_response);
+}
+
+Status RequestDispatcher::DispatchRequestAsync(const MultiSetRequest &request,
+                                               MultiRequestResultCallback callback) const {
+  if (request.key_values.empty()) {
+    return Status(Status::RedisExecErr, "MSET requires at least one key-value pair");
+  }
+
+  brpc::RedisRequest redis_request;
+  std::vector<std::string> remote_keys;
+  std::vector<butil::StringPiece> components;
+  remote_keys.reserve(request.key_values.size());
+  components.reserve(request.key_values.size() * 2 + 2);
+  components.emplace_back("MSET");
+  for (const auto &key_value : request.key_values) {
+    remote_keys.emplace_back(ComposeRemoteKey(request.ns, key_value.first));
+    components.emplace_back(remote_keys.back());
+    components.emplace_back(key_value.second);
+  }
+  auto command_flags = EncodeCommandFlags(request.command_flags);
+  components.emplace_back(command_flags);
+  if (!redis_request.AddCommandByComponents(components.data(), components.size())) {
+    return Status(Status::RedisExecErr, "failed to build MSET request");
+  }
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      MakeAsyncResponseCallback<MultiRequestResult>(
+          std::move(callback), [](const brpc::RedisResponse &response) { return ParseMSetResponse(response); }));
 }
 
 Status RequestDispatcher::BuildRedisCommandRequest(const std::string &command_name, const std::string &ns,
@@ -420,7 +588,8 @@ Status RequestDispatcher::BuildRedisCommandRequest(const std::string &command_na
   return Status::OK();
 }
 
-StatusOr<RequestResult> RequestDispatcher::DispatchIntegerCommand(const std::string &command_name, const std::string &ns,
+StatusOr<RequestResult> RequestDispatcher::DispatchIntegerCommand(const std::string &command_name,
+                                                                  const std::string &ns,
                                                                   const std::vector<std::string> &args,
                                                                   const std::vector<size_t> &key_arg_indexes,
                                                                   uint64_t command_flags) const {
@@ -432,6 +601,20 @@ StatusOr<RequestResult> RequestDispatcher::DispatchIntegerCommand(const std::str
   auto s = ExecuteRedisCommand(redis_request, &redis_response);
   if (!s.IsOK()) return s;
   return ParseIntegerResponse(redis_response, command_name);
+}
+
+Status RequestDispatcher::DispatchIntegerCommandAsync(const std::string &command_name, const std::string &ns,
+                                                      const std::vector<std::string> &args,
+                                                      const std::vector<size_t> &key_arg_indexes,
+                                                      uint64_t command_flags, RequestResultCallback callback) const {
+  brpc::RedisRequest redis_request;
+  auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
+  if (!build_status.IsOK()) return build_status;
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  MakeAsyncResponseCallback<RequestResult>(
+                                      std::move(callback), [command_name](const brpc::RedisResponse &response) {
+                                        return ParseIntegerResponse(response, command_name);
+                                      }));
 }
 
 StatusOr<RequestResult> RequestDispatcher::DispatchSingleCommand(const std::string &command_name, const std::string &ns,
@@ -448,6 +631,20 @@ StatusOr<RequestResult> RequestDispatcher::DispatchSingleCommand(const std::stri
   return ParseSingleResponse(redis_response, command_name);
 }
 
+Status RequestDispatcher::DispatchSingleCommandAsync(const std::string &command_name, const std::string &ns,
+                                                     const std::vector<std::string> &args,
+                                                     const std::vector<size_t> &key_arg_indexes, uint64_t command_flags,
+                                                     RequestResultCallback callback) const {
+  brpc::RedisRequest redis_request;
+  auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
+  if (!build_status.IsOK()) return build_status;
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  MakeAsyncResponseCallback<RequestResult>(
+                                      std::move(callback), [command_name](const brpc::RedisResponse &response) {
+                                        return ParseSingleResponse(response, command_name);
+                                      }));
+}
+
 StatusOr<RequestResult> RequestDispatcher::DispatchStatusCommand(const std::string &command_name, const std::string &ns,
                                                                  const std::vector<std::string> &args,
                                                                  const std::vector<size_t> &key_arg_indexes,
@@ -462,7 +659,26 @@ StatusOr<RequestResult> RequestDispatcher::DispatchStatusCommand(const std::stri
   return ParseSetResponse(redis_response, command_name);
 }
 
-StatusOr<MultiRequestResult> RequestDispatcher::DispatchArrayCommand(const std::string &command_name, const std::string &ns,
+Status RequestDispatcher::DispatchStatusCommandAsync(const std::string &command_name, const std::string &ns,
+                                                     const std::vector<std::string> &args,
+                                                     const std::vector<size_t> &key_arg_indexes, uint64_t command_flags,
+                                                     RequestResultCallback callback) const {
+  brpc::RedisRequest redis_request;
+  auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
+  if (!build_status.IsOK()) return build_status;
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      [command_name, callback = std::move(callback)](Status status, const brpc::RedisResponse &response) mutable {
+        if (!status.IsOK()) {
+          callback(StatusOr<RequestResult>(std::move(status)));
+          return;
+        }
+        callback(ParseSetResponse(response, command_name));
+      });
+}
+
+StatusOr<MultiRequestResult> RequestDispatcher::DispatchArrayCommand(const std::string &command_name,
+                                                                     const std::string &ns,
                                                                      const std::vector<std::string> &args,
                                                                      const std::vector<size_t> &key_arg_indexes,
                                                                      uint64_t command_flags) const {
@@ -474,6 +690,24 @@ StatusOr<MultiRequestResult> RequestDispatcher::DispatchArrayCommand(const std::
   auto s = ExecuteRedisCommand(redis_request, &redis_response);
   if (!s.IsOK()) return s;
   return ParseArrayResponse(redis_response, command_name);
+}
+
+Status RequestDispatcher::DispatchArrayCommandAsync(const std::string &command_name, const std::string &ns,
+                                                    const std::vector<std::string> &args,
+                                                    const std::vector<size_t> &key_arg_indexes, uint64_t command_flags,
+                                                    MultiRequestResultCallback callback) const {
+  brpc::RedisRequest redis_request;
+  auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
+  if (!build_status.IsOK()) return build_status;
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      [command_name, callback = std::move(callback)](Status status, const brpc::RedisResponse &response) mutable {
+        if (!status.IsOK()) {
+          callback(StatusOr<MultiRequestResult>(std::move(status)));
+          return;
+        }
+        callback(ParseArrayResponse(response, command_name));
+      });
 }
 
 // 统一封装远端 key 编码逻辑，避免上层命令感知 namespace/slot 细节。

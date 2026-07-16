@@ -17,42 +17,23 @@
 
 #ifndef KVROCKS_BRPC_CLIENT_H
 #define KVROCKS_BRPC_CLIENT_H
-#include <signal.h>
-#include <stdio.h>
-#include <gflags/gflags.h>
-#include <butil/logging.h>
 #include <brpc/channel.h>
 #include <brpc/redis.h>
 
+#include <functional>
+
 #include "common/status.h"
 
-// 用于异步回调的上下文结构体
-struct RedisCallContext {
-    brpc::RedisResponse response;
-    brpc::Controller cntl;
-    std::atomic<bool> done{false};
-    
-    void Reset() {
-        response.Clear();
-        cntl.Reset();
-        done.store(false, std::memory_order_relaxed);
-    }
+class BrpcClient {
+ public:
+  using ResponseCallback = std::function<void(Status, const brpc::RedisResponse &)>;
+
+  int Init(const char *server, const char *connection_type, int timeout_ms, int max_retry);
+  Status RequestSync(const brpc::RedisRequest &request, brpc::RedisResponse *response);
+  Status RequestAsync(brpc::RedisRequest request, ResponseCallback callback);
+
+ private:
+  brpc::Channel channel_;
 };
 
-/**
- * Initialize brpc client
- * @return 0 on success, -1 on failure
- */
-int brpc_client_init(const char* server, const char* connection_type, int timeout_ms, int max_retry);
-
-/**
- * Send request to redis server via brpc asynchronously
- * @param command Redis command to execute
- * @param ctx Pointer to the RedisCallContext to store the response
- * @return true on success, false on failure
- */
-bool brpc_request_async(const char* command, RedisCallContext* ctx);
-
-Status brpc_request_sync(const brpc::RedisRequest& request, brpc::RedisResponse* response);
-
-#endif // KVROCKS_BRPC_CLIENT_H
+#endif  // KVROCKS_BRPC_CLIENT_H

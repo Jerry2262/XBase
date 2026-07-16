@@ -23,6 +23,7 @@
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 
+#include <functional>
 #include <list>
 #include <map>
 #include <memory>
@@ -131,6 +132,10 @@ class Server {
   Status LookupAndCreateCommand(const std::string &cmd_name, std::unique_ptr<Redis::Commander> *cmd);
   Status DispatchProxyCommand(const Redis::CommandAttributes &attributes, const std::vector<std::string> &cmd_tokens,
                               const std::string &ns, std::string *reply) const;
+  using ProxyCommandCallback = std::function<void(Status, std::string)>;
+  Status DispatchProxyCommandAsync(const Redis::CommandAttributes &attributes,
+                                   const std::vector<std::string> &cmd_tokens, const std::string &ns,
+                                   ProxyCommandCallback callback) const;
   void AdjustOpenFilesLimit();
 
   Status AddMaster(std::string host, uint32_t port, bool force_reconnect);
