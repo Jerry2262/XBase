@@ -47,3 +47,6 @@ testsdb
 
 build
 cmake-build-*
+
+docs/superpowers/*
+.superpowers/*
