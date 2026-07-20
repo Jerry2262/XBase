@@ -37,14 +37,14 @@
 
 namespace {
 
-Status ApplyProxyBrpcThreadConfig(const Config &config) {
-  if (!config.RunsProxy() || config.proxy_brpc_num_threads <= 0) {
+Status ApplyBrpcThreadConfig(const Config &config) {
+  const int num_threads = config.RunsProxy() ? config.proxy_brpc_num_threads : config.datanode_brpc_num_threads;
+  if (num_threads <= 0) {
     return Status::OK();
   }
 
-  if (bthread_setconcurrency(config.proxy_brpc_num_threads) != 0) {
-    return {Status::NotOK,
-            "failed to set proxy brpc worker threads to " + std::to_string(config.proxy_brpc_num_threads)};
+  if (bthread_setconcurrency(num_threads) != 0) {
+    return {Status::NotOK, "failed to set brpc worker threads to " + std::to_string(num_threads)};
   }
   return Status::OK();
 }
@@ -191,7 +191,7 @@ int RunConfiguredApp(int argc, char **argv) {
   AppUtil::PrintVersion(LOG(INFO));
   LOG(INFO) << "Configured service type: " << config.GetServiceTypeName();
 
-  s = ApplyProxyBrpcThreadConfig(config);
+  s = ApplyBrpcThreadConfig(config);
   if (!s.IsOK()) {
     LOG(ERROR) << s.Msg();
     return 1;
