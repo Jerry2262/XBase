@@ -77,7 +77,8 @@ set(LEVELDB_INCLUDE_DIR "" CACHE PATH "Path to leveldb headers")
 set(GFLAGS_SOURCE_DIR "${BRPC_SOURCE_CACHE_DIR}/gflags-src")
 set(PROTOBUF_SOURCE_DIR "${BRPC_SOURCE_CACHE_DIR}/protobuf-src")
 set(LEVELDB_SOURCE_DIR "${BRPC_SOURCE_CACHE_DIR}/leveldb-src")
-set(BRPC_SOURCE_DIR "${BRPC_SOURCE_CACHE_DIR}/brpc-src")
+set(BRPC_SOURCE_DIR "${BRPC_SOURCE_CACHE_DIR}/brpc-src" CACHE PATH
+    "Path to the brpc source tree")
 
 set(GFLAGS_INSTALL_DIR "${GFLAGS_ROOT}")
 set(PROTOBUF_INSTALL_DIR "${PROTOBUF_ROOT}")
