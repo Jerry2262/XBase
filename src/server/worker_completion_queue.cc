@@ -54,11 +54,15 @@ WorkerCompletionQueue::~WorkerCompletionQueue() {
 }
 
 bool WorkerCompletionQueue::Post(ProxyCommandCompletion completion) {
+  bool should_notify = false;
   {
     std::lock_guard<std::mutex> guard(mu_);
     if (stopped_) return false;
+    should_notify = pending_.empty();
     pending_.emplace_back(std::move(completion));
   }
+
+  if (!should_notify) return true;
 
   const uint64_t value = 1;
   ssize_t bytes = 0;
