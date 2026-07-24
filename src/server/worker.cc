@@ -29,6 +29,7 @@
 #include <openssl/ssl.h>
 #endif
 
+#include <atomic>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -45,6 +46,9 @@
 #include "server.h"
 #include "storage/scripting.h"
 #include "util.h"
+
+std::vector<Worker*> Worker::pool_;
+std::atomic<size_t> Worker::next_{0};
 
 Worker::Worker(Server *svr, Config *config, bool repl) : svr_(svr) {
   base_ = event_base_new();
@@ -71,6 +75,7 @@ Worker::Worker(Server *svr, Config *config, bool repl) : svr_(svr) {
     }
   }
   lua_ = Lua::CreateState(true);
+  pool_.push_back(this);
 }
 
 Worker::~Worker() {
@@ -120,14 +125,15 @@ void Worker::newTCPConnection(evconnlistener *listener, evutil_socket_t fd, sock
     evutil_closesocket(fd);
     return;
   }
-  event_base *base = evconnlistener_get_base(listener);
   auto evThreadSafeFlags = BEV_OPT_THREADSAFE | BEV_OPT_DEFER_CALLBACKS | BEV_OPT_UNLOCK_CALLBACKS;
+  Worker *target = pool_[next_++ % pool_.size()];
+  event_base *base = target->base_;
 
   bufferevent *bev;
 #ifdef ENABLE_OPENSSL
   SSL *ssl = nullptr;
   if (local_port == worker->svr_->GetConfig()->tls_port) {
-    ssl = SSL_new(worker->svr_->ssl_ctx_.get());
+    ssl = SSL_new(target->svr_->ssl_ctx_.get());
     if (!ssl) {
       LOG(ERROR) << "Failed to construct SSL structure for new connection: " << SSLErrors{};
       evutil_closesocket(fd);
@@ -156,10 +162,10 @@ void Worker::newTCPConnection(evconnlistener *listener, evutil_socket_t fd, sock
     bufferevent_openssl_set_allow_dirty_shutdown(bev, 1);
   }
 #endif
-  auto conn = new Redis::Connection(bev, worker);
+  auto conn = new Redis::Connection(bev, target);
   bufferevent_setcb(bev, Redis::Connection::OnRead, Redis::Connection::OnWrite, Redis::Connection::OnEvent, conn);
   bufferevent_enable(bev, EV_READ);
-  Status status = worker->AddConnection(conn);
+  Status status = target->AddConnection(conn);
   if (!status.IsOK()) {
     std::string err_msg = Redis::Error("ERR " + status.Msg());
     Util::SockSend(fd, err_msg);

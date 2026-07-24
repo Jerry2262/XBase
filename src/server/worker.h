@@ -92,6 +92,9 @@ class Worker {
   struct bufferevent_rate_limit_group *rate_limit_group_ = nullptr;
   struct ev_token_bucket_cfg *rate_limit_group_cfg_ = nullptr;
   lua_State *lua_;
+
+  static std::vector<Worker*> pool_;
+  static std::atomic<size_t> next_;
 };
 
 class WorkerThread {
