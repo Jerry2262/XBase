@@ -241,21 +241,19 @@ Status brpc_server_start() {
     LOG(ERROR) << "Invalid brpc redis server bind address " << bind << ":" << port;
     return {Status::NotOK, "invalid brpc redis server bind address"};
   }
-  if (g_brpc_server->Start(endpoint, &options) != 0) {
-    LOG(ERROR) << "Failed to start brpc redis server on " << endpoint;
-    return {Status::NotOK, "failed to start brpc redis server"};
-  }
 
-  LOG(INFO) << "Brpc server started on " << endpoint;
-
-  // Unix domain socket listener for local proxy communication.
+  // Unix domain socket for proxy communication (A4 experiment).
   butil::EndPoint uds_endpoint;
-  if (butil::str2endpoint("unix:/tmp/xbase-datanode.sock", &uds_endpoint) == 0) {
-    if (g_brpc_server->Start(uds_endpoint, &options) == 0) {
-      LOG(INFO) << "Brpc server also listening on unix:/tmp/xbase-datanode.sock";
-    } else {
-      LOG(WARNING) << "Failed to start brpc unix socket listener, continuing with TCP only";
+  if (butil::str2endpoint("unix:/tmp/xbase-datanode.sock", &uds_endpoint) == 0 &&
+      g_brpc_server->Start(uds_endpoint, &options) == 0) {
+    LOG(INFO) << "Brpc server started on unix:/tmp/xbase-datanode.sock";
+  } else {
+    LOG(ERROR) << "Failed to start brpc server on unix socket, falling back to TCP";
+    if (g_brpc_server->Start(endpoint, &options) != 0) {
+      LOG(ERROR) << "Failed to start brpc redis server on " << endpoint;
+      return {Status::NotOK, "failed to start brpc redis server"};
     }
+    LOG(INFO) << "Brpc server started on " << endpoint;
   }
 
   return Status::OK();
