@@ -426,7 +426,6 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
         continue;
       }
       proxy_command_pending_ = true;
-      bufferevent_disable(bev_, EV_READ);
       return;
     }
 
@@ -500,7 +499,6 @@ void Connection::OnProxyCommandCompletion(Status status, std::string reply) {
   }
   if (IsFlagEnabled(kCloseAfterReply)) return;
 
-  bufferevent_enable(bev_, EV_READ);
   if (evbuffer_get_length(Input()) != 0) {
     bufferevent_trigger(bev_, EV_READ, BEV_TRIG_DEFER_CALLBACKS);
   }
