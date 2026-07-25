@@ -247,6 +247,17 @@ Status brpc_server_start() {
   }
 
   LOG(INFO) << "Brpc server started on " << endpoint;
+
+  // Unix domain socket listener for local proxy communication.
+  butil::EndPoint uds_endpoint;
+  if (butil::str2endpoint("unix:/tmp/xbase-datanode.sock", &uds_endpoint) == 0) {
+    if (g_brpc_server->Start(uds_endpoint, &options) == 0) {
+      LOG(INFO) << "Brpc server also listening on unix:/tmp/xbase-datanode.sock";
+    } else {
+      LOG(WARNING) << "Failed to start brpc unix socket listener, continuing with TCP only";
+    }
+  }
+
   return Status::OK();
 }
 
