@@ -19,4 +19,5 @@ fi
 ./x.py build -j"${build_jobs}" \
   -D BRPC_BUILD_JOBS="${build_jobs}" \
   -D CMAKE_WARN_DEPRECATED=OFF \
-  -D FETCHCONTENT_SOURCE_DIR_ROCKSDB=../../rocksdb
+  -D FETCHCONTENT_SOURCE_DIR_ROCKSDB=../../rocksdb \
+  -D BRPC_SOURCE_DIR_OVERRIDE=../../brpc
