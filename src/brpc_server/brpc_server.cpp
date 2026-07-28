@@ -25,6 +25,7 @@
 #include <butil/endpoint.h>
 #include <glog/logging.h>
 
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -39,6 +40,9 @@
 #include "storage/storage.h"
 
 namespace {
+
+constexpr char kDatanodeUnixSocketPath[] = "/tmp/xbase-datanode.sock";
+constexpr char kDatanodeUnixEndpoint[] = "unix:/tmp/xbase-datanode.sock";
 
 Engine::Storage *g_storage = nullptr;
 Config *g_config = nullptr;
@@ -248,12 +252,14 @@ Status brpc_server_start() {
   }
   LOG(INFO) << "Brpc server started on " << endpoint;
 
+  std::remove(kDatanodeUnixSocketPath);
   g_brpc_uds_server = std::make_unique<brpc::Server>();
-  if (g_brpc_uds_server->Start("unix:/tmp/xbase-datanode.sock", &options) == 0) {
-    LOG(INFO) << "Brpc server started on unix:/tmp/xbase-datanode.sock";
+  if (g_brpc_uds_server->Start(kDatanodeUnixEndpoint, &options) == 0) {
+    LOG(INFO) << "Brpc server started on " << kDatanodeUnixEndpoint;
   } else {
     LOG(WARNING) << "Failed to start brpc unix socket server, proxy will connect via TCP";
     g_brpc_uds_server.reset();
+    std::remove(kDatanodeUnixSocketPath);
   }
 
   return Status::OK();
@@ -268,6 +274,7 @@ void brpc_server_stop() {
     g_brpc_uds_server->Join();
     g_brpc_uds_server.reset();
   }
+  std::remove(kDatanodeUnixSocketPath);
   g_brpc_server->Stop(0);
   g_brpc_server->Join();
   g_brpc_server.reset();
