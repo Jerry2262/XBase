@@ -197,6 +197,7 @@ class CoreRedisCommandHandler : public brpc::RedisCommandHandler {
 
 std::mutex g_brpc_mu;
 std::unique_ptr<brpc::Server> g_brpc_server;
+std::unique_ptr<brpc::Server> g_brpc_uds_server;
 std::unique_ptr<brpc::RedisService> g_redis_service;
 std::unique_ptr<CoreRedisCommandHandler> g_core_handler;
 
@@ -245,8 +246,16 @@ Status brpc_server_start() {
     LOG(ERROR) << "Failed to start brpc redis server on " << endpoint;
     return {Status::NotOK, "failed to start brpc redis server"};
   }
-
   LOG(INFO) << "Brpc server started on " << endpoint;
+
+  g_brpc_uds_server = std::make_unique<brpc::Server>();
+  if (g_brpc_uds_server->Start("unix:/tmp/xbase-datanode.sock", &options) == 0) {
+    LOG(INFO) << "Brpc server started on unix:/tmp/xbase-datanode.sock";
+  } else {
+    LOG(WARNING) << "Failed to start brpc unix socket server, proxy will connect via TCP";
+    g_brpc_uds_server.reset();
+  }
+
   return Status::OK();
 }
 
@@ -254,6 +263,11 @@ void brpc_server_stop() {
   std::lock_guard<std::mutex> guard(g_brpc_mu);
   if (!g_brpc_server) return;
 
+  if (g_brpc_uds_server) {
+    g_brpc_uds_server->Stop(0);
+    g_brpc_uds_server->Join();
+    g_brpc_uds_server.reset();
+  }
   g_brpc_server->Stop(0);
   g_brpc_server->Join();
   g_brpc_server.reset();
