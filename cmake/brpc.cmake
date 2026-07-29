@@ -531,13 +531,15 @@ if(NOT brpc_FOUND)
     set(BRPC_LIBRARY "${BRPC_INSTALL_DIR}/lib64/libbrpc.a")
     set(BRPC_INCLUDE_DIR "${BRPC_INSTALL_DIR}/include")
     set(_brpc_build_options "")
+    set(_brpc_binary_dir "${CMAKE_BINARY_DIR}/_deps/brpc-subbuild")
     if(NOT "${BRPC_SOURCE_DIR_OVERRIDE}" STREQUAL "")
         list(APPEND _brpc_build_options ALWAYS_BUILD)
+        set(_brpc_binary_dir "${CMAKE_BINARY_DIR}/_deps/brpc-override-subbuild")
     endif()
     _brpc_add_cmake_build_target(
         brpc
         "${brpc_SOURCE_DIR}"
-        "${CMAKE_BINARY_DIR}/_deps/brpc-subbuild"
+        "${_brpc_binary_dir}"
         "${BRPC_INSTALL_DIR}"
         ${_brpc_build_options}
         FORWARD_CPP_FLAGS
