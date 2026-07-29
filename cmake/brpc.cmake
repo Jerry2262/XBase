@@ -255,7 +255,7 @@ function(_brpc_add_ready_target target_name)
 endfunction()
 
 function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_dir)
-    set(options FORWARD_CPP_FLAGS USE_C)
+    set(options ALWAYS_BUILD FORWARD_CPP_FLAGS USE_C)
     set(one_value_args SOURCE_SUBDIR LIBDIR)
     set(multi_value_args CMAKE_ARGS DEPENDS BYPRODUCTS POST_INSTALL_COMMANDS PREFIX_PATHS)
     cmake_parse_arguments(arg "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
@@ -319,8 +319,7 @@ function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_
         ${arg_CMAKE_ARGS}
     )
 
-    add_custom_command(
-        OUTPUT ${arg_BYPRODUCTS}
+    set(_brpc_build_commands
         COMMAND ${CMAKE_COMMAND} -E make_directory "${binary_dir}"
         COMMAND ${CMAKE_COMMAND} -E echo "[brpc-deps] configuring ${target_name}"
         COMMAND ${CMAKE_COMMAND} ${_brpc_cmake_args}
@@ -329,12 +328,27 @@ function(_brpc_add_cmake_build_target target_name source_dir binary_dir install_
         COMMAND ${CMAKE_COMMAND} -E echo "[brpc-deps] installing ${target_name} into ${install_dir}"
         COMMAND ${CMAKE_COMMAND} --install "${binary_dir}"
         ${arg_POST_INSTALL_COMMANDS}
-        DEPENDS ${arg_DEPENDS}
-        USES_TERMINAL
-        VERBATIM
     )
 
-    add_custom_target(${target_name} DEPENDS ${arg_BYPRODUCTS})
+    if(arg_ALWAYS_BUILD)
+        add_custom_target(${target_name}
+            ${_brpc_build_commands}
+            BYPRODUCTS ${arg_BYPRODUCTS}
+            DEPENDS ${arg_DEPENDS}
+            USES_TERMINAL
+            VERBATIM
+        )
+    else()
+        add_custom_command(
+            OUTPUT ${arg_BYPRODUCTS}
+            ${_brpc_build_commands}
+            DEPENDS ${arg_DEPENDS}
+            USES_TERMINAL
+            VERBATIM
+        )
+
+        add_custom_target(${target_name} DEPENDS ${arg_BYPRODUCTS})
+    endif()
 endfunction()
 
 set(brpc_FOUND FALSE)
@@ -343,7 +357,11 @@ if(BRPC_ALLOW_SYSTEM_PACKAGE)
     find_package(brpc QUIET)
 endif()
 
-if(NOT brpc_FOUND)
+if(NOT "${BRPC_SOURCE_DIR_OVERRIDE}" STREQUAL "")
+    set(brpc_FOUND FALSE)
+endif()
+
+if(NOT brpc_FOUND AND "${BRPC_SOURCE_DIR_OVERRIDE}" STREQUAL "")
     _brpc_find_local_library(BRPC_LIBRARY BRPC_LIBRARY BRPC_ROOT brpc)
     _brpc_find_local_path(BRPC_INCLUDE_DIR BRPC_INCLUDE_DIR BRPC_ROOT brpc/channel.h)
 
@@ -512,11 +530,16 @@ if(NOT brpc_FOUND)
     endif()
     set(BRPC_LIBRARY "${BRPC_INSTALL_DIR}/lib64/libbrpc.a")
     set(BRPC_INCLUDE_DIR "${BRPC_INSTALL_DIR}/include")
+    set(_brpc_build_options "")
+    if(NOT "${BRPC_SOURCE_DIR_OVERRIDE}" STREQUAL "")
+        list(APPEND _brpc_build_options ALWAYS_BUILD)
+    endif()
     _brpc_add_cmake_build_target(
         brpc
         "${brpc_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/_deps/brpc-subbuild"
         "${BRPC_INSTALL_DIR}"
+        ${_brpc_build_options}
         FORWARD_CPP_FLAGS
         USE_C
         LIBDIR lib64
