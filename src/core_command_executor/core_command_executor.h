@@ -75,7 +75,7 @@ class CoreCommandExecutor {
 
   // 解析请求尾部 flags，并把结果缓存下来供 Execute 复用。
   // 如果解析失败，会先清空旧缓存，保证 Execute 不会误执行上一条命令。
-  StatusOr<ParsedCommandFlags> ParseFlags(const brpc::RedisRequest &request) const;
+  StatusOr<ParsedCommandFlags> ParseFlags(brpc::RedisRequest &request) const;
   // 执行最近一次 ParseFlags/ParseRequest 解析出的命令。
   // 默认调用链里，core 线程池会先调用 ParseFlags(request)，它会顺手把解析出的
   // command_request 缓存下来，因此这里执行阶段不需要再次传入 request。
@@ -102,7 +102,7 @@ class CoreCommandExecutor {
   };
 
   // 把 RedisRequest 解析成执行器内部命令对象。
-  StatusOr<CoreCommandRequest> ParseRequest(const brpc::RedisRequest &request) const;
+  StatusOr<CoreCommandRequest> ParseRequest(brpc::RedisRequest &request) const;
   // 清空最近一次缓存的解析结果。解析失败时也会调用，保证缓存 fail-closed。
   void ClearParsedRequest() const;
   // 保存最近一次解析结果，供后续 Execute 直接消费。

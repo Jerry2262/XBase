@@ -60,7 +60,7 @@ Status MakeExecutionError(const rocksdb::Status &status) { return {Status::Redis
 
 // 从 brpc::RedisRequest 中取出首条命令参数。
 // brpc::RedisRequest 公开接口没有直接暴露参数数组，因此这里复用 brpc 自带 parser。
-StatusOr<std::vector<std::string>> GetCommand(const brpc::RedisRequest &request) {
+StatusOr<std::vector<std::string>> GetCommand(brpc::RedisRequest &request) {
   butil::IOBuf buffer;
   if (!request.SerializeTo(&buffer)) {
     return MakeParseError("failed to serialize redis request");
@@ -238,7 +238,7 @@ Status ParseZRangeByScoreArgs(const std::vector<std::string> &command_args, ZRan
 CoreCommandExecutor::CoreCommandExecutor(Engine::Storage *storage, const Config &config)
     : storage_(storage), slot_id_encoded_(config.slot_id_encoded) {}
 
-StatusOr<ParsedCommandFlags> CoreCommandExecutor::ParseFlags(const brpc::RedisRequest &request) const {
+StatusOr<ParsedCommandFlags> CoreCommandExecutor::ParseFlags(brpc::RedisRequest &request) const {
   // 先清空旧缓存，确保本次解析失败时不会误留下上一条命令。
   ClearParsedRequest();
 
@@ -294,7 +294,7 @@ StatusOr<CoreCommandResult> CoreCommandExecutor::Execute() const {
 }
 
 StatusOr<CoreCommandExecutor::CoreCommandRequest> CoreCommandExecutor::ParseRequest(
-    const brpc::RedisRequest &request) const {
+    brpc::RedisRequest &request) const {
   // 统一做命令名识别、最小参数校验和 flags 解析，避免执行阶段重复判断。
   auto command_args = GetCommand(request);
   if (!command_args.IsOK()) return command_args.ToStatus();
