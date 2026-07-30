@@ -46,10 +46,12 @@
 #include "test_base.h"
 #include "types/redis_list.h"
 
+class WorkerCompletionQueueHandle;
+
 namespace {
 
-static_assert(
-    std::is_same_v<decltype(std::declval<Worker &>().CompletionQueue()), std::weak_ptr<WorkerCompletionQueue>>);
+static_assert(std::is_same_v<decltype(std::declval<Worker &>().NewCompletionHandle()),
+                             std::shared_ptr<WorkerCompletionQueueHandle>>);
 
 int PickFreePort() {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
