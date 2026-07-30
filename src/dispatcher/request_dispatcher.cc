@@ -43,16 +43,17 @@ std::string ReplyToString(const brpc::RedisReply &reply) {
   return std::string(data.data(), data.size());
 }
 
-StatusOr<MultiRequestResult> ParseArrayResponse(const brpc::RedisResponse &response, const std::string &command_name);
+StatusOr<MultiRequestResult> ParseArrayResponse(const brpc::RedisResponse &response, const std::string &command_name,
+                                                size_t reply_index = 0);
 
 // 解析单值读取类命令的返回结果，例如 GET/HGET/LINDEX。
 // nil 表示未命中，其余非 error 的字符串结果写入 RequestResult::value。
-StatusOr<RequestResult> ParseGetResponse(const brpc::RedisResponse &response) {
-  if (response.reply_size() != 1) {
+StatusOr<RequestResult> ParseGetResponse(const brpc::RedisResponse &response, size_t reply_index = 0) {
+  if (reply_index >= static_cast<size_t>(response.reply_size())) {
     return Status(Status::RedisExecErr, "unexpected GET response size");
   }
 
-  const auto &reply = response.reply(0);
+  const auto &reply = response.reply(reply_index);
   if (reply.is_nil()) return RequestResult{};
   if (reply.is_error()) {
     return Status(Status::RedisExecErr, reply.error_message());
@@ -65,12 +66,13 @@ StatusOr<RequestResult> ParseGetResponse(const brpc::RedisResponse &response) {
 }
 
 // 解析整数型返回结果，例如 HSET 返回新增字段数。
-StatusOr<RequestResult> ParseIntegerResponse(const brpc::RedisResponse &response, const std::string &command_name) {
-  if (response.reply_size() != 1) {
+StatusOr<RequestResult> ParseIntegerResponse(const brpc::RedisResponse &response, const std::string &command_name,
+                                             size_t reply_index = 0) {
+  if (reply_index >= static_cast<size_t>(response.reply_size())) {
     return Status(Status::RedisExecErr, "unexpected " + command_name + " response size");
   }
 
-  const auto &reply = response.reply(0);
+  const auto &reply = response.reply(reply_index);
   if (reply.is_error()) {
     return Status(Status::RedisExecErr, reply.error_message());
   }
@@ -83,12 +85,13 @@ StatusOr<RequestResult> ParseIntegerResponse(const brpc::RedisResponse &response
   return result;
 }
 
-StatusOr<RequestResult> ParseSingleResponse(const brpc::RedisResponse &response, const std::string &command_name) {
-  if (response.reply_size() != 1) {
+StatusOr<RequestResult> ParseSingleResponse(const brpc::RedisResponse &response, const std::string &command_name,
+                                            size_t reply_index = 0) {
+  if (reply_index >= static_cast<size_t>(response.reply_size())) {
     return Status(Status::RedisExecErr, "unexpected " + command_name + " response size");
   }
 
-  const auto &reply = response.reply(0);
+  const auto &reply = response.reply(reply_index);
   if (reply.is_error()) {
     return Status(Status::RedisExecErr, reply.error_message());
   }
@@ -108,12 +111,13 @@ StatusOr<RequestResult> ParseSingleResponse(const brpc::RedisResponse &response,
 }
 
 // 解析状态型返回结果，例如 SET/LSET/MSET 这类返回 "OK" 的命令。
-StatusOr<std::string> ParseStatusResponse(const brpc::RedisResponse &response, const std::string &command_name) {
-  if (response.reply_size() != 1) {
+StatusOr<std::string> ParseStatusResponse(const brpc::RedisResponse &response, const std::string &command_name,
+                                          size_t reply_index = 0) {
+  if (reply_index >= static_cast<size_t>(response.reply_size())) {
     return Status(Status::RedisExecErr, "unexpected " + command_name + " response size");
   }
 
-  const auto &reply = response.reply(0);
+  const auto &reply = response.reply(reply_index);
   if (reply.is_error()) {
     return Status(Status::RedisExecErr, reply.error_message());
   }
@@ -128,8 +132,9 @@ StatusOr<std::string> ParseStatusResponse(const brpc::RedisResponse &response, c
   return status;
 }
 
-StatusOr<RequestResult> ParseSetResponse(const brpc::RedisResponse &response, const std::string &command_name) {
-  auto status = ParseStatusResponse(response, command_name);
+StatusOr<RequestResult> ParseSetResponse(const brpc::RedisResponse &response, const std::string &command_name,
+                                         size_t reply_index = 0) {
+  auto status = ParseStatusResponse(response, command_name, reply_index);
   if (!status.IsOK()) return status.ToStatus();
 
   RequestResult result;
@@ -138,13 +143,13 @@ StatusOr<RequestResult> ParseSetResponse(const brpc::RedisResponse &response, co
 }
 
 // 解析 MGET 返回结果。每个 reply 都会映射到 founds/values 中同一位置。
-StatusOr<MultiRequestResult> ParseMGetResponse(const brpc::RedisResponse &response) {
-  return ParseArrayResponse(response, "MGET");
+StatusOr<MultiRequestResult> ParseMGetResponse(const brpc::RedisResponse &response, size_t reply_index = 0) {
+  return ParseArrayResponse(response, "MGET", reply_index);
 }
 
 // 解析 MSET 返回结果，预期只返回一个整体状态。
-StatusOr<MultiRequestResult> ParseMSetResponse(const brpc::RedisResponse &response) {
-  auto status = ParseStatusResponse(response, "MSET");
+StatusOr<MultiRequestResult> ParseMSetResponse(const brpc::RedisResponse &response, size_t reply_index = 0) {
+  auto status = ParseStatusResponse(response, "MSET", reply_index);
   if (!status.IsOK()) return status.ToStatus();
 
   MultiRequestResult result;
@@ -152,12 +157,13 @@ StatusOr<MultiRequestResult> ParseMSetResponse(const brpc::RedisResponse &respon
   return result;
 }
 
-StatusOr<MultiRequestResult> ParseArrayResponse(const brpc::RedisResponse &response, const std::string &command_name) {
-  if (response.reply_size() != 1) {
+StatusOr<MultiRequestResult> ParseArrayResponse(const brpc::RedisResponse &response, const std::string &command_name,
+                                                size_t reply_index) {
+  if (reply_index >= static_cast<size_t>(response.reply_size())) {
     return Status(Status::RedisExecErr, "unexpected " + command_name + " response size");
   }
 
-  const auto &array_reply = response.reply(0);
+  const auto &array_reply = response.reply(reply_index);
   if (array_reply.is_error()) {
     return Status(Status::RedisExecErr, array_reply.error_message());
   }
@@ -188,22 +194,24 @@ std::string EncodeCommandFlags(uint64_t command_flags) { return std::to_string(c
 
 template <typename Result, typename Callback, typename Parser>
 BrpcClient::ResponseCallback MakeAsyncResponseCallback(Callback callback, Parser parser) {
-  return [callback = std::move(callback), parser = std::move(parser)](Status status,
-                                                                      const brpc::RedisResponse &response) mutable {
+  return [callback = std::move(callback), parser = std::move(parser)](
+             Status status, const brpc::RedisResponse &response, size_t reply_index) mutable {
     if (!status.IsOK()) {
       callback(StatusOr<Result>(std::move(status)));
       return;
     }
-    callback(parser(response));
+    callback(parser(response, reply_index));
   };
 }
 
 }  // namespace
 
 // 初始化远端 Redis brpc 通道，后续所有命令分发都复用该连接配置。
-RequestDispatcher::RequestDispatcher(const Config &config) : slot_id_encoded_(config.slot_id_encoded) {
+RequestDispatcher::RequestDispatcher(const Config &config, event_base *event_base)
+    : slot_id_encoded_(config.slot_id_encoded) {
   init_result_ = brpc_client_.Init(config.storage_backend_addrs.c_str(), config.storage_rpc_connection_type.c_str(),
-                                   config.storage_rpc_timeout_ms, config.storage_rpc_max_retry);
+                                   config.storage_rpc_timeout_ms, config.storage_rpc_max_retry,
+                                   event_base == nullptr ? 1 : config.storage_rpc_batch_size, event_base);
 }
 
 Status RequestDispatcher::ExecuteRedisCommand(const brpc::RedisRequest &redis_request,
@@ -320,10 +328,11 @@ Status RequestDispatcher::DispatchRequestAsync(const GetRequestCommand &request,
       break;
     }
   }
-  return ExecuteRedisCommandAsync(
-      std::move(redis_request),
-      MakeAsyncResponseCallback<RequestResult>(
-          std::move(callback), [](const brpc::RedisResponse &response) { return ParseGetResponse(response); }));
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  MakeAsyncResponseCallback<RequestResult>(
+                                      std::move(callback), [](const brpc::RedisResponse &response, size_t reply_index) {
+                                        return ParseGetResponse(response, reply_index);
+                                      }));
 }
 
 // 处理所有单 key 写请求，根据数据结构类型翻译成 SET/HSET/LSET。
@@ -439,13 +448,14 @@ Status RequestDispatcher::DispatchRequestAsync(const SetRequestCommand &request,
       break;
     }
   }
-  return ExecuteRedisCommandAsync(std::move(redis_request),
-                                  MakeAsyncResponseCallback<RequestResult>(
-                                      std::move(callback), [response_command = std::move(response_command),
-                                                            integer_response](const brpc::RedisResponse &response) {
-                                        return integer_response ? ParseIntegerResponse(response, response_command)
-                                                                : ParseSetResponse(response, response_command);
-                                      }));
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      MakeAsyncResponseCallback<RequestResult>(
+          std::move(callback), [response_command = std::move(response_command), integer_response](
+                                   const brpc::RedisResponse &response, size_t reply_index) {
+            return integer_response ? ParseIntegerResponse(response, response_command, reply_index)
+                                    : ParseSetResponse(response, response_command, reply_index);
+          }));
 }
 
 // 处理批量读取请求，对多个 key 统一拼装一条 MGET。
@@ -495,10 +505,11 @@ Status RequestDispatcher::DispatchRequestAsync(const MultiGetRequest &request,
   if (!redis_request.AddCommandByComponents(components.data(), components.size())) {
     return Status(Status::RedisExecErr, "failed to build MGET request");
   }
-  return ExecuteRedisCommandAsync(
-      std::move(redis_request),
-      MakeAsyncResponseCallback<MultiRequestResult>(
-          std::move(callback), [](const brpc::RedisResponse &response) { return ParseMGetResponse(response); }));
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  MakeAsyncResponseCallback<MultiRequestResult>(
+                                      std::move(callback), [](const brpc::RedisResponse &response, size_t reply_index) {
+                                        return ParseMGetResponse(response, reply_index);
+                                      }));
 }
 
 // 处理批量写入请求，对多个 key/value 统一拼装一条 MSET。
@@ -552,10 +563,11 @@ Status RequestDispatcher::DispatchRequestAsync(const MultiSetRequest &request,
   if (!redis_request.AddCommandByComponents(components.data(), components.size())) {
     return Status(Status::RedisExecErr, "failed to build MSET request");
   }
-  return ExecuteRedisCommandAsync(
-      std::move(redis_request),
-      MakeAsyncResponseCallback<MultiRequestResult>(
-          std::move(callback), [](const brpc::RedisResponse &response) { return ParseMSetResponse(response); }));
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  MakeAsyncResponseCallback<MultiRequestResult>(
+                                      std::move(callback), [](const brpc::RedisResponse &response, size_t reply_index) {
+                                        return ParseMSetResponse(response, reply_index);
+                                      }));
 }
 
 Status RequestDispatcher::BuildRedisCommandRequest(const std::string &command_name, const std::string &ns,
@@ -610,11 +622,12 @@ Status RequestDispatcher::DispatchIntegerCommandAsync(const std::string &command
   brpc::RedisRequest redis_request;
   auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
   if (!build_status.IsOK()) return build_status;
-  return ExecuteRedisCommandAsync(std::move(redis_request),
-                                  MakeAsyncResponseCallback<RequestResult>(
-                                      std::move(callback), [command_name](const brpc::RedisResponse &response) {
-                                        return ParseIntegerResponse(response, command_name);
-                                      }));
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      MakeAsyncResponseCallback<RequestResult>(std::move(callback),
+                                               [command_name](const brpc::RedisResponse &response, size_t reply_index) {
+                                                 return ParseIntegerResponse(response, command_name, reply_index);
+                                               }));
 }
 
 StatusOr<RequestResult> RequestDispatcher::DispatchSingleCommand(const std::string &command_name, const std::string &ns,
@@ -638,11 +651,12 @@ Status RequestDispatcher::DispatchSingleCommandAsync(const std::string &command_
   brpc::RedisRequest redis_request;
   auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
   if (!build_status.IsOK()) return build_status;
-  return ExecuteRedisCommandAsync(std::move(redis_request),
-                                  MakeAsyncResponseCallback<RequestResult>(
-                                      std::move(callback), [command_name](const brpc::RedisResponse &response) {
-                                        return ParseSingleResponse(response, command_name);
-                                      }));
+  return ExecuteRedisCommandAsync(
+      std::move(redis_request),
+      MakeAsyncResponseCallback<RequestResult>(std::move(callback),
+                                               [command_name](const brpc::RedisResponse &response, size_t reply_index) {
+                                                 return ParseSingleResponse(response, command_name, reply_index);
+                                               }));
 }
 
 StatusOr<RequestResult> RequestDispatcher::DispatchStatusCommand(const std::string &command_name, const std::string &ns,
@@ -666,15 +680,15 @@ Status RequestDispatcher::DispatchStatusCommandAsync(const std::string &command_
   brpc::RedisRequest redis_request;
   auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
   if (!build_status.IsOK()) return build_status;
-  return ExecuteRedisCommandAsync(
-      std::move(redis_request),
-      [command_name, callback = std::move(callback)](Status status, const brpc::RedisResponse &response) mutable {
-        if (!status.IsOK()) {
-          callback(StatusOr<RequestResult>(std::move(status)));
-          return;
-        }
-        callback(ParseSetResponse(response, command_name));
-      });
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  [command_name, callback = std::move(callback)](
+                                      Status status, const brpc::RedisResponse &response, size_t reply_index) mutable {
+                                    if (!status.IsOK()) {
+                                      callback(StatusOr<RequestResult>(std::move(status)));
+                                      return;
+                                    }
+                                    callback(ParseSetResponse(response, command_name, reply_index));
+                                  });
 }
 
 StatusOr<MultiRequestResult> RequestDispatcher::DispatchArrayCommand(const std::string &command_name,
@@ -699,15 +713,15 @@ Status RequestDispatcher::DispatchArrayCommandAsync(const std::string &command_n
   brpc::RedisRequest redis_request;
   auto build_status = BuildRedisCommandRequest(command_name, ns, args, key_arg_indexes, command_flags, &redis_request);
   if (!build_status.IsOK()) return build_status;
-  return ExecuteRedisCommandAsync(
-      std::move(redis_request),
-      [command_name, callback = std::move(callback)](Status status, const brpc::RedisResponse &response) mutable {
-        if (!status.IsOK()) {
-          callback(StatusOr<MultiRequestResult>(std::move(status)));
-          return;
-        }
-        callback(ParseArrayResponse(response, command_name));
-      });
+  return ExecuteRedisCommandAsync(std::move(redis_request),
+                                  [command_name, callback = std::move(callback)](
+                                      Status status, const brpc::RedisResponse &response, size_t reply_index) mutable {
+                                    if (!status.IsOK()) {
+                                      callback(StatusOr<MultiRequestResult>(std::move(status)));
+                                      return;
+                                    }
+                                    callback(ParseArrayResponse(response, command_name, reply_index));
+                                  });
 }
 
 // 统一封装远端 key 编码逻辑，避免上层命令感知 namespace/slot 细节。

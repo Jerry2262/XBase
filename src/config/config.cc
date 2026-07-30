@@ -137,6 +137,7 @@ Config::Config() {
       {"max-replication-mb", false, new IntField(&max_replication_mb, 0, 0, INT_MAX)},
       {"storage-rpc-timeout-ms", false, new IntField(&storage_rpc_timeout_ms, 1000, 0, INT_MAX)},
       {"storage-rpc-max-retry", false, new IntField(&storage_rpc_max_retry, 3, 0, INT_MAX)},
+      {"storage-rpc-batch-size", true, new IntField(&storage_rpc_batch_size, 1, 1, 64)},
       {"proxy-brpc-num-threads", true, new IntField(&proxy_brpc_num_threads, 0, 0, 256)},
       {"datanode-brpc-num-threads", true, new IntField(&datanode_brpc_num_threads, 0, 0, 256)},
       {"storage-backend-addrs", true, new StringField(&storage_backend_addrs, "")},

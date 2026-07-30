@@ -54,6 +54,9 @@
 namespace Redis {
 struct CommandAttributes;
 }
+namespace Dispatcher {
+class RequestDispatcher;
+}
 
 struct DBScanInfo {
   time_t last_scan_time = 0;
@@ -135,7 +138,8 @@ class Server {
   using ProxyCommandCallback = std::function<void(Status, std::string)>;
   Status DispatchProxyCommandAsync(const Redis::CommandAttributes &attributes,
                                    const std::vector<std::string> &cmd_tokens, const std::string &ns,
-                                   ProxyCommandCallback callback) const;
+                                   ProxyCommandCallback callback,
+                                   Dispatcher::RequestDispatcher *request_dispatcher = nullptr) const;
   void AdjustOpenFilesLimit();
 
   Status AddMaster(std::string host, uint32_t port, bool force_reconnect);

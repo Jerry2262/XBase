@@ -115,6 +115,7 @@ struct Config {
   int max_bitmap_to_string_mb = 16;
   int storage_rpc_timeout_ms = 1000;
   int storage_rpc_max_retry = 3;
+  int storage_rpc_batch_size = 1;
   int proxy_brpc_num_threads = 0;
   int datanode_brpc_num_threads = 0;
   bool master_use_repl_port = false;

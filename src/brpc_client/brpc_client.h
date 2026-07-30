@@ -19,21 +19,40 @@
 #define KVROCKS_BRPC_CLIENT_H
 #include <brpc/channel.h>
 #include <brpc/redis.h>
+#include <event2/event.h>
 
+#include <cstddef>
 #include <functional>
+#include <vector>
 
 #include "common/status.h"
 
 class BrpcClient {
  public:
-  using ResponseCallback = std::function<void(Status, const brpc::RedisResponse &)>;
+  using ResponseCallback = std::function<void(Status, const brpc::RedisResponse &, size_t)>;
 
-  int Init(const char *server, const char *connection_type, int timeout_ms, int max_retry);
+  ~BrpcClient();
+
+  int Init(const char *server, const char *connection_type, int timeout_ms, int max_retry, int batch_size = 1,
+           event_base *event_base = nullptr);
   Status RequestSync(const brpc::RedisRequest &request, brpc::RedisResponse *response);
   Status RequestAsync(brpc::RedisRequest request, ResponseCallback callback);
 
  private:
+  struct PendingCall {
+    brpc::RedisRequest request;
+    ResponseCallback callback;
+  };
+
+  static void FlushBatch(evutil_socket_t, short, void *ctx);
+  void FlushPending();
+  void SendBatch(std::vector<PendingCall> calls);
+  void SendOne(PendingCall call);
+
   brpc::Channel channel_;
+  event *flush_event_ = nullptr;
+  std::vector<PendingCall> pending_;
+  int batch_size_ = 1;
 };
 
 #endif  // KVROCKS_BRPC_CLIENT_H

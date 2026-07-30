@@ -29,13 +29,13 @@
 #include <openssl/ssl.h>
 #endif
 
-#include <atomic>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <list>
@@ -47,12 +47,19 @@
 #include "storage/scripting.h"
 #include "util.h"
 
-std::vector<Worker*> Worker::pool_;
+std::vector<Worker *> Worker::pool_;
 std::atomic<size_t> Worker::next_{0};
 
 Worker::Worker(Server *svr, Config *config, bool repl) : svr_(svr) {
   base_ = event_base_new();
   if (!base_) throw std::exception();
+
+#ifdef BRPC_FOUND
+  if (svr_->storage_ == nullptr) {
+    request_dispatcher_ = std::make_unique<Dispatcher::RequestDispatcher>(*config, base_);
+    if (request_dispatcher_->init_result() != 0) throw std::runtime_error("failed to initialize request dispatcher");
+  }
+#endif
 
   completion_queue_ = std::make_unique<WorkerCompletionQueue>(
       base_, [this](ProxyCommandCompletion completion) { OnProxyCommandCompletion(std::move(completion)); });
@@ -89,6 +96,9 @@ Worker::~Worker() {
   for (const auto &iter : conns) {
     iter->Close();
   }
+#ifdef BRPC_FOUND
+  request_dispatcher_.reset();
+#endif
   completion_queue_->Stop();
   completion_queue_.reset();
   event_free(timer_);

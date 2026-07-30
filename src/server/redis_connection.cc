@@ -421,7 +421,8 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
           [completion_handle = std::move(completion_handle), fd, connection_id](Status status,
                                                                                 std::string response) mutable {
             completion_handle->Post({fd, connection_id, std::move(status), std::move(response)});
-          });
+          },
+          owner_->GetRequestDispatcher());
       if (!s.IsOK()) {
         Reply(Redis::Error("ERR " + s.Msg()));
         continue;

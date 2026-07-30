@@ -175,7 +175,7 @@ class RequestDispatcher {
   using RequestResultCallback = std::function<void(StatusOr<RequestResult>)>;
   using MultiRequestResultCallback = std::function<void(StatusOr<MultiRequestResult>)>;
 
-  explicit RequestDispatcher(const Config &config);
+  explicit RequestDispatcher(const Config &config, event_base *event_base = nullptr);
 
   // brpc 初始化结果。0 表示成功，非 0 表示初始化失败。
   int init_result() const { return init_result_; }

@@ -41,6 +41,9 @@
 #include "storage/storage.h"
 
 class Server;
+namespace Dispatcher {
+class RequestDispatcher;
+}
 
 class Worker {
  public:
@@ -62,6 +65,13 @@ class Worker {
   std::shared_ptr<WorkerCompletionQueueHandle> NewCompletionHandle() const {
     return std::make_shared<WorkerCompletionQueueHandle>(completion_queue_.get());
   }
+  Dispatcher::RequestDispatcher *GetRequestDispatcher() const {
+#ifdef BRPC_FOUND
+    return request_dispatcher_.get();
+#else
+    return nullptr;
+#endif
+  }
   void OnProxyCommandCompletion(ProxyCommandCompletion completion);
 
   std::string GetClientsStr();
@@ -82,6 +92,9 @@ class Worker {
   Redis::Connection *removeConnection(int fd);
 
   event_base *base_;
+#ifdef BRPC_FOUND
+  std::unique_ptr<Dispatcher::RequestDispatcher> request_dispatcher_;
+#endif
   std::unique_ptr<WorkerCompletionQueue> completion_queue_;
   event *timer_;
   std::thread::id tid_;
@@ -95,7 +108,7 @@ class Worker {
   struct ev_token_bucket_cfg *rate_limit_group_cfg_ = nullptr;
   lua_State *lua_;
 
-  static std::vector<Worker*> pool_;
+  static std::vector<Worker *> pool_;
   static std::atomic<size_t> next_;
 };
 
