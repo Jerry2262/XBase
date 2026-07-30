@@ -24,6 +24,7 @@
 
 #include <memory>
 #include <thread>
+#include <vector>
 
 TEST(WorkerCompletionQueueTest, DeliversCompletionOnEventLoopThread) {
   auto *base = event_base_new();
@@ -68,6 +69,31 @@ TEST(WorkerCompletionQueueTest, HandleRejectsCompletionAfterStop) {
   WorkerCompletionQueueHandle handle(queue.get());
   handle.Stop();
   EXPECT_FALSE(handle.Post({11, 22, Status::OK(), "+OK\r\n"}));
+  queue->Stop();
+  queue.reset();
+  event_base_free(base);
+}
+
+TEST(WorkerCompletionQueueTest, YieldsAfterDrainingCurrentBatch) {
+  auto *base = event_base_new();
+  ASSERT_NE(base, nullptr);
+
+  WorkerCompletionQueue *queue_ptr = nullptr;
+  std::vector<int> delivered_fds;
+  auto queue = std::make_unique<WorkerCompletionQueue>(base, [&](ProxyCommandCompletion completion) {
+    delivered_fds.emplace_back(completion.fd);
+    if (completion.fd == 11) {
+      EXPECT_TRUE(queue_ptr->Post({33, 44, Status::OK(), "+NEXT\r\n"}));
+    }
+  });
+  queue_ptr = queue.get();
+
+  ASSERT_TRUE(queue->Post({11, 22, Status::OK(), "+OK\r\n"}));
+  ASSERT_EQ(event_base_loop(base, EVLOOP_ONCE), 0);
+  ASSERT_EQ(delivered_fds, (std::vector<int>{11}));
+  ASSERT_EQ(event_base_loop(base, EVLOOP_ONCE), 0);
+  EXPECT_EQ(delivered_fds, (std::vector<int>{11, 33}));
+
   queue->Stop();
   queue.reset();
   event_base_free(base);

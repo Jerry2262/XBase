@@ -58,12 +58,18 @@ bool WorkerCompletionQueue::Post(ProxyCommandCompletion completion) {
   {
     std::lock_guard<std::mutex> guard(mu_);
     if (stopped_) return false;
-    should_notify = pending_.empty();
     pending_.emplace_back(std::move(completion));
+    if (!notification_outstanding_) {
+      notification_outstanding_ = true;
+      should_notify = true;
+    }
   }
 
   if (!should_notify) return true;
+  return Notify();
+}
 
+bool WorkerCompletionQueue::Notify() {
   const uint64_t value = 1;
   ssize_t bytes = 0;
   do {
@@ -78,6 +84,7 @@ void WorkerCompletionQueue::Stop() {
     if (stopped_) return;
     stopped_ = true;
     pending_.clear();
+    notification_outstanding_ = false;
   }
   if (notify_event_ != nullptr) event_del(notify_event_);
 }
@@ -104,6 +111,18 @@ void WorkerCompletionQueue::Drain() {
   for (auto &completion : pending) {
     handler_(std::move(completion));
   }
+
+  bool should_notify = false;
+  {
+    std::lock_guard<std::mutex> guard(mu_);
+    if (stopped_) return;
+    if (pending_.empty()) {
+      notification_outstanding_ = false;
+    } else {
+      should_notify = true;
+    }
+  }
+  if (should_notify) Notify();
 }
 
 bool WorkerCompletionQueueHandle::Post(ProxyCommandCompletion completion) {

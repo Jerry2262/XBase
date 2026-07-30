@@ -52,6 +52,7 @@ class WorkerCompletionQueue {
 
  private:
   static void OnNotify(evutil_socket_t fd, int16_t events, void *ctx);
+  bool Notify();
   void Drain();
 
   int notify_fd_ = -1;
@@ -59,6 +60,7 @@ class WorkerCompletionQueue {
   Handler handler_;
   std::mutex mu_;
   std::deque<ProxyCommandCompletion> pending_;
+  bool notification_outstanding_ = false;
   bool stopped_ = false;
 };
 
