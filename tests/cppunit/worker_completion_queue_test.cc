@@ -59,3 +59,16 @@ TEST(WorkerCompletionQueueTest, RejectsCompletionAfterStop) {
   queue.reset();
   event_base_free(base);
 }
+
+TEST(WorkerCompletionQueueTest, HandleRejectsCompletionAfterStop) {
+  auto *base = event_base_new();
+  ASSERT_NE(base, nullptr);
+  auto queue = std::make_unique<WorkerCompletionQueue>(
+      base, [](ProxyCommandCompletion) { FAIL() << "stopped handle invoked handler"; });
+  WorkerCompletionQueueHandle handle(queue.get());
+  handle.Stop();
+  EXPECT_FALSE(handle.Post({11, 22, Status::OK(), "+OK\r\n"}));
+  queue->Stop();
+  queue.reset();
+  event_base_free(base);
+}

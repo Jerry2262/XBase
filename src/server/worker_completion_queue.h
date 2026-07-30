@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -59,4 +60,16 @@ class WorkerCompletionQueue {
   std::mutex mu_;
   std::deque<ProxyCommandCompletion> pending_;
   bool stopped_ = false;
+};
+
+class WorkerCompletionQueueHandle {
+ public:
+  explicit WorkerCompletionQueueHandle(WorkerCompletionQueue *queue) : queue_(queue) {}
+
+  bool Post(ProxyCommandCompletion completion);
+  void Stop();
+
+ private:
+  std::mutex mu_;
+  WorkerCompletionQueue *queue_;
 };

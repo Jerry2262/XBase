@@ -53,6 +53,7 @@ Connection::Connection(bufferevent *bev, Worker *owner)
 }
 
 Connection::~Connection() {
+  if (completion_handle_) completion_handle_->Stop();
   if (bev_) {
     int fd = bufferevent_getfd(bev_);
     bufferevent_free(bev_);
@@ -411,15 +412,15 @@ void Connection::ExecuteCommands(std::deque<CommandTokens> *to_process_cmds) {
         continue;
       }
 
-      auto completion_queue = owner_->CompletionQueue();
+      if (!completion_handle_) completion_handle_ = owner_->NewCompletionHandle();
+      auto completion_handle = completion_handle_;
       const int fd = GetFD();
       const uint64_t connection_id = GetID();
       s = svr_->DispatchProxyCommandAsync(
           *attributes, cmd_tokens, GetNamespace(),
-          [completion_queue, fd, connection_id](Status status, std::string response) mutable {
-            if (auto queue = completion_queue.lock()) {
-              queue->Post({fd, connection_id, std::move(status), std::move(response)});
-            }
+          [completion_handle = std::move(completion_handle), fd, connection_id](Status status,
+                                                                                std::string response) mutable {
+            completion_handle->Post({fd, connection_id, std::move(status), std::move(response)});
           });
       if (!s.IsOK()) {
         Reply(Redis::Error("ERR " + s.Msg()));

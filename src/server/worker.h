@@ -59,7 +59,9 @@ class Worker {
   Status Reply(int fd, const std::string &reply);
   void BecomeMonitorConn(Redis::Connection *conn);
   void FeedMonitorConns(Redis::Connection *conn, const std::vector<std::string> &tokens);
-  std::weak_ptr<WorkerCompletionQueue> CompletionQueue() const { return completion_queue_; }
+  std::shared_ptr<WorkerCompletionQueueHandle> NewCompletionHandle() const {
+    return std::make_shared<WorkerCompletionQueueHandle>(completion_queue_.get());
+  }
   void OnProxyCommandCompletion(ProxyCommandCompletion completion);
 
   std::string GetClientsStr();
@@ -80,7 +82,7 @@ class Worker {
   Redis::Connection *removeConnection(int fd);
 
   event_base *base_;
-  std::shared_ptr<WorkerCompletionQueue> completion_queue_;
+  std::unique_ptr<WorkerCompletionQueue> completion_queue_;
   event *timer_;
   std::thread::id tid_;
   std::vector<evconnlistener *> listen_events_;

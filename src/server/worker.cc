@@ -54,7 +54,7 @@ Worker::Worker(Server *svr, Config *config, bool repl) : svr_(svr) {
   base_ = event_base_new();
   if (!base_) throw std::exception();
 
-  completion_queue_ = std::make_shared<WorkerCompletionQueue>(
+  completion_queue_ = std::make_unique<WorkerCompletionQueue>(
       base_, [this](ProxyCommandCompletion completion) { OnProxyCommandCompletion(std::move(completion)); });
 
   timer_ = event_new(base_, -1, EV_PERSIST, TimerCB, this);

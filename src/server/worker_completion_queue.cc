@@ -105,3 +105,14 @@ void WorkerCompletionQueue::Drain() {
     handler_(std::move(completion));
   }
 }
+
+bool WorkerCompletionQueueHandle::Post(ProxyCommandCompletion completion) {
+  std::lock_guard<std::mutex> guard(mu_);
+  if (queue_ == nullptr) return false;
+  return queue_->Post(std::move(completion));
+}
+
+void WorkerCompletionQueueHandle::Stop() {
+  std::lock_guard<std::mutex> guard(mu_);
+  queue_ = nullptr;
+}

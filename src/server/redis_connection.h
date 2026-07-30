@@ -32,6 +32,7 @@
 #include "redis_request.h"
 
 class Worker;
+class WorkerCompletionQueueHandle;
 
 namespace Redis {
 class Connection {
@@ -149,5 +150,6 @@ class Connection {
 
   bool importing_ = false;
   bool proxy_command_pending_ = false;
+  std::shared_ptr<WorkerCompletionQueueHandle> completion_handle_;
 };
 }  // namespace Redis
